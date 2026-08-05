@@ -1,4 +1,4 @@
-# A MONEY PORTFOLIO Demo
+# AMONEY PORTFOLIO
 
 개인 투자 포트폴리오를 한 화면에서 관리하는 로컬 웹 애플리케이션의 GitHub 배포용 데모입니다. 국내외 주식, ETF, 예·적금, 거래, 배당금, 실현손익과 재무설계를 브라우저에서 관리할 수 있습니다.
 
