@@ -1,6 +1,12 @@
 param([int]$Port = 8780)
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$backupFolderName = -join ([char[]](0xBC31, 0xC5C5, 0xD30C, 0xC77C))
+$fullBackupLabel = -join ([char[]](0xC804, 0xCCB4, 0xBC31, 0xC5C5))
+$backupRoot = Join-Path $projectRoot $backupFolderName
+if (-not (Test-Path -LiteralPath $backupRoot -PathType Container)) {
+  New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+}
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
@@ -27,6 +33,75 @@ while ($listener.IsListening) {
     $request = $context.Request
     $response = $context.Response
     $path = $request.Url.AbsolutePath
+
+    if ($path -eq '/api/backup' -and $request.HttpMethod -eq 'POST') {
+      if ($request.ContentLength64 -gt 10MB) {
+        Send-Json $response @{ error = 'backup_too_large' } 413
+        continue
+      }
+      $reader = [IO.StreamReader]::new($request.InputStream, $request.ContentEncoding)
+      try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+      try {
+        $payload = $body | ConvertFrom-Json -ErrorAction Stop
+        if ($payload.application -notin @('A_MONEY_PORTFOLIO', 'WEALTHBOARD') -or -not $payload.data) {
+          throw 'invalid_backup_payload'
+        }
+      } catch {
+        Send-Json $response @{ error = 'invalid_backup_payload' } 400
+        continue
+      }
+      $stamp = (Get-Date).ToString('yyyy-MM-dd-HHmmss')
+      $fileName = "a-money-portfolio-$fullBackupLabel-$stamp.json"
+      $backupPath = Join-Path $backupRoot $fileName
+      try {
+        [IO.File]::WriteAllText($backupPath, $body, [Text.UTF8Encoding]::new($false))
+      } catch {
+        Send-Json $response @{ error = 'backup_write_failed'; message = $_.Exception.Message; target = [string]$backupPath } 500
+        continue
+      }
+      Send-Json $response @{
+        saved = $true
+        fileName = $fileName
+        relativePath = "$backupFolderName\$fileName"
+        savedAt = (Get-Date).ToString('o')
+      }
+      continue
+    }
+
+    if ($path -eq '/api/backups' -and $request.HttpMethod -eq 'GET') {
+      $items = @(Get-ChildItem -LiteralPath $backupRoot -File -Filter '*.json' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        ForEach-Object {
+          @{
+            fileName = $_.Name
+            size = $_.Length
+            modifiedAt = $_.LastWriteTime.ToString('o')
+          }
+        })
+      Send-Json $response @{ folder = $backupFolderName; items = $items }
+      continue
+    }
+
+    if ($path -eq '/api/backup' -and $request.HttpMethod -eq 'GET') {
+      $name64 = [string]$request.QueryString['name64']
+      try {
+        $fileName = if ($name64) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($name64)) } else { [string]$request.QueryString['name'] }
+      } catch {
+        Send-Json $response @{ error = 'invalid_backup_name' } 400
+        continue
+      }
+      if ([string]::IsNullOrWhiteSpace($fileName) -or [IO.Path]::GetFileName($fileName) -ne $fileName -or $fileName -notmatch '\.json$') {
+        Send-Json $response @{ error = 'invalid_backup_name' } 400
+        continue
+      }
+      $backupPath = Join-Path $backupRoot $fileName
+      if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+        Send-Json $response @{ error = 'backup_not_found' } 404
+        continue
+      }
+      Send-Response $response ([IO.File]::ReadAllBytes($backupPath)) 'application/json; charset=utf-8'
+      continue
+    }
 
     if ($path -eq '/api/fx') {
       $currency = ([string]$request.QueryString['currency']).Trim().ToUpperInvariant()
@@ -246,3 +321,4 @@ while ($listener.IsListening) {
     try { Send-Json $response @{ error = 'upstream_failure'; message = $_.Exception.Message } 502 } catch {}
   }
 }
+

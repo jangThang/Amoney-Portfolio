@@ -14,6 +14,21 @@
   const accountKey = (account, asset) => account + '\u0000' + asset;
 
   const existingAccounts = [...new Set(transactions.map(item => item.account).filter(Boolean))];
+  function inferredAccountSettings(name) {
+    const related = transactions.filter(item => item.account === name);
+    const foreignTransaction = related.find(item => {
+      const currency = String(item.currency || '').trim().toUpperCase();
+      return currency && currency !== 'KRW';
+    });
+    const currency = String(foreignTransaction?.currency || '').trim().toUpperCase()
+      || (String(name || '').includes('\ud574\uc678') ? 'USD' : 'KRW');
+    return {
+      market: currency === 'KRW' ? '\uad6d\ub0b4' : '\ud574\uc678',
+      currency,
+      defaultFx: currency === 'KRW' ? 1 : 0
+    };
+  }
+  const comparableAccountName = value => String(value || '').replace(/\s*\uacc4\uc88c\s*$/, '').trim();
   const accountSeed = existingAccounts.map(name => {
     const overseas = name === '\ud574\uc678\uc8fc\uc2dd \uacc4\uc88c';
     return {
@@ -45,7 +60,7 @@
   if (localStorage.getItem('wb-account-migration') !== '2026-07-31-v1') {
     existingAccounts.forEach(name => {
       if (!accounts.some(item => item.name === name)) {
-        accounts.push({ name, broker: name, market: '\uad6d\ub0b4', currency: 'KRW', defaultFx: 1 });
+        accounts.push({ name, broker: name, ...inferredAccountSettings(name) });
       }
     });
     if (!accounts.some(item => item.name === '\ud574\uc678\uc8fc\uc2dd \uacc4\uc88c')) {
@@ -63,12 +78,56 @@
     localStorage.setItem('wb-account-migration', '2026-07-31-v1');
   }
 
+  if (localStorage.getItem('wb-account-market-recovery') !== '2026-08-14-v2') {
+    existingAccounts.forEach(name => {
+      const inferred = inferredAccountSettings(name);
+      let account = accounts.find(item => item.name === name);
+      if (!account && inferred.market === '\ud574\uc678') {
+        account = accounts.find(item => item.market === '\ud574\uc678'
+          && comparableAccountName(item.name) === comparableAccountName(name));
+        if (account) account.name = name;
+      }
+      if (!account) {
+        accounts.push({ name, broker: name, ...inferred });
+      } else if (inferred.market === '\ud574\uc678') {
+        account.market = '\ud574\uc678';
+        account.currency = inferred.currency;
+        account.defaultFx = number(account.defaultFx) || inferred.defaultFx;
+      }
+    });
+    existingAccounts.forEach(name => {
+      const exact = accounts.find(item => item.name === name);
+      const preserved = accounts.find(item => item !== exact
+        && item.market === '\ud574\uc678'
+        && comparableAccountName(item.name) === comparableAccountName(name)
+        && number(item.defaultFx));
+      if (exact && preserved && exact.broker === name && !number(exact.defaultFx)) {
+        exact.broker = preserved.broker || '';
+        exact.defaultFx = number(preserved.defaultFx);
+        accounts = accounts.filter(item => item !== preserved);
+      }
+    });
+    saveAccounts();
+    localStorage.setItem('wb-account-market-recovery', '2026-08-14-v2');
+  }
+
   if (localStorage.getItem('wb-dividend-account-migration') !== '2026-08-05-v1') {
     transactions.forEach(item => {
       if (item.type === '\ubc30\ub2f9') item.account = '';
     });
     save();
     localStorage.setItem('wb-dividend-account-migration', '2026-08-05-v1');
+  }
+
+  if (localStorage.getItem('wb-dividend-schedule-migration') !== '2026-08-05-v1') {
+    transactions.forEach(item => {
+      if (item.type === '\ubc30\ub2f9' && item.asset === '\uc0bc\uc131\uc804\uc790' && (item.date || '').slice(0, 7) === '2025-08') {
+        item.recordDate = '2025-06-30';
+        item.exDividendDate = '2025-06-27';
+      }
+    });
+    save();
+    localStorage.setItem('wb-dividend-schedule-migration', '2026-08-05-v1');
   }
 
   function securityMasters() {
@@ -333,11 +392,10 @@
   }
 
   function accountFor(name) {
-    return accounts.find(item => item.name === name) || {
+    return accounts.find(item => item.name === name)
+      || accounts.find(item => comparableAccountName(item.name) === comparableAccountName(name)) || {
       name,
-      market: '\uad6d\ub0b4',
-      currency: 'KRW',
-      defaultFx: 1
+      ...inferredAccountSettings(name)
     };
   }
 
@@ -730,6 +788,46 @@
       <div class="performance-table-wrap"><table><thead><tr><th>\uc9c0\uae09\uc6d4</th><th>\uc885\ubaa9</th><th>\uae30\uc900\uc77c\u00b7\ubc30\ub2f9\ub77d\uc77c</th><th>\uc804\uccb4 \uacc4\uc88c \uae30\uc900\uc218\ub7c9</th><th>\uc138\ud6c4 \uc8fc\ub2f9 \ubc30\ub2f9\uae08</th><th>\uc138\ud6c4 \ubc30\ub2f9\uae08</th><th>\ube44\uace0</th><th></th></tr></thead><tbody id="dividendRows"></tbody></table></div>
     </div>`;
   document.querySelector('#goals').before(performanceView);
+  const transactionExcelInput = document.createElement('input');
+  transactionExcelInput.id = 'importTransactionsExcel';
+  transactionExcelInput.type = 'file';
+  transactionExcelInput.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  transactionExcelInput.hidden = true;
+  const transactionExcelButton = document.createElement('button');
+  transactionExcelButton.type = 'button';
+  transactionExcelButton.className = 'btn light';
+  transactionExcelButton.id = 'openTransactionsExcel';
+  transactionExcelButton.textContent = '\uac70\ub798\ub0b4\uc5ed Excel \uc5c5\ub85c\ub4dc';
+  transactionExcelButton.title = '.xlsx \ud30c\uc77c\uc758 \uac70\ub798\ub0b4\uc5ed\uc744 \uae30\uc874 \ub370\uc774\ud130\uc5d0 \ubcd1\ud569\ud569\ub2c8\ub2e4.';
+  const transactionTemplateButton = document.createElement('button');
+  transactionTemplateButton.type = 'button';
+  transactionTemplateButton.className = 'btn light';
+  transactionTemplateButton.id = 'downloadTransactionsTemplate';
+  transactionTemplateButton.textContent = '\uac70\ub798\ub0b4\uc5ed \uc591\uc2dd \ub2e4\uc6b4\ub85c\ub4dc';
+  transactionTemplateButton.title = '\uc791\uc131 \uc548\ub0b4\uc640 \uc785\ub825 \uc2dc\ud2b8\uac00 \ud3ec\ud568\ub41c .xlsx \uc591\uc2dd\uc744 \ub2e4\uc6b4\ub85c\ub4dc\ud569\ub2c8\ub2e4.';
+  const transactionToolbarActions = document.createElement('div');
+  transactionToolbarActions.className = 'transaction-toolbar-actions';
+  byId('openTransaction').before(transactionToolbarActions);
+  transactionToolbarActions.append(transactionTemplateButton, transactionExcelButton, transactionExcelInput, byId('openTransaction'));
+
+  const dividendExcelInput = document.createElement('input');
+  dividendExcelInput.id = 'importDividendsExcel';
+  dividendExcelInput.type = 'file';
+  dividendExcelInput.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  dividendExcelInput.hidden = true;
+  const dividendExcelButton = document.createElement('button');
+  dividendExcelButton.type = 'button';
+  dividendExcelButton.className = 'btn light';
+  dividendExcelButton.id = 'openDividendsExcel';
+  dividendExcelButton.textContent = '\ubc30\ub2f9\uae08 Excel \uc5c5\ub85c\ub4dc';
+  dividendExcelButton.title = '.xlsx \ud30c\uc77c\uc5d0\uc11c \ubc30\ub2f9 \ud589\ub9cc \ubd88\ub7ec\uc635\ub2c8\ub2e4.';
+  const dividendTemplateButton = document.createElement('button');
+  dividendTemplateButton.type = 'button';
+  dividendTemplateButton.className = 'btn light';
+  dividendTemplateButton.id = 'downloadDividendsTemplate';
+  dividendTemplateButton.textContent = '\ubc30\ub2f9\uae08 \uc591\uc2dd \ub2e4\uc6b4\ub85c\ub4dc';
+  dividendTemplateButton.title = '\uc791\uc131 \uc548\ub0b4\uc640 \uc785\ub825 \uc2dc\ud2b8\uac00 \ud3ec\ud568\ub41c .xlsx \uc591\uc2dd\uc744 \ub2e4\uc6b4\ub85c\ub4dc\ud569\ub2c8\ub2e4.';
+  byId('refreshDividendSchedules').before(dividendTemplateButton, dividendExcelButton, dividendExcelInput);
   let dividendChartMonths = '12';
   let automaticDividendLookupStarted = false;
 
@@ -795,7 +893,7 @@
       <div class="data-action-grid">
         <section class="data-action-block primary">
           <div><span class="data-action-kicker">\uad8c\uc7a5</span><h4>\uc804\uccb4 \ubc31\uc5c5</h4><p>\uac70\ub798, \uacc4\uc88c, \uc885\ubaa9, \uc608\u00b7\uc801\uae08, \ubc30\ub2f9, \uc124\uc815\uc744 \ud558\ub098\uc758 JSON \ud30c\uc77c\ub85c \ubcf4\uad00\ud569\ub2c8\ub2e4.</p></div>
-          <div class="data-action-buttons"><button type="button" class="btn" id="exportBackup">\uc804\uccb4 \ubc31\uc5c5 \ub2e4\uc6b4\ub85c\ub4dc</button><label class="btn light">\ubc31\uc5c5 \ud30c\uc77c \ubcf5\uc6d0<input id="importBackup" type="file" accept=".json,application/json" hidden></label></div>
+          <div class="data-action-buttons"><button type="button" class="btn" id="exportBackup">\uc804\uccb4 \ubc31\uc5c5 \ub2e4\uc6b4\ub85c\ub4dc</button><button type="button" class="btn light" id="restoreProjectBackup">\ubc31\uc5c5 \ud30c\uc77c \ubcf5\uc6d0</button><label class="btn light">\ub2e4\ub978 \uc704\uce58 \ud30c\uc77c<input id="importBackup" type="file" accept=".json,application/json" hidden></label></div>
           <small id="lastBackupText">\ucd5c\uadfc \ubc31\uc5c5 \uae30\ub85d \uc5c6\uc74c</small>
         </section>
         <section class="data-action-block">
@@ -816,6 +914,21 @@
     byId('settings').appendChild(dashboardDataPanel);
   }
 
+  const backupRestoreModal = document.createElement('div');
+  backupRestoreModal.className = 'modal';
+  backupRestoreModal.id = 'backupRestoreModal';
+  backupRestoreModal.innerHTML = `
+    <div class="dialog backup-restore-dialog" role="dialog" aria-modal="true" aria-labelledby="backupRestoreTitle">
+      <div class="market-dialog-head">
+        <div><h2 id="backupRestoreTitle">\ubc31\uc5c5 \ud30c\uc77c \ubcf5\uc6d0</h2><div class="muted">\ud504\ub85c\uc81d\ud2b8\uc758 <b>\ubc31\uc5c5\ud30c\uc77c</b> \ud3f4\ub354</div></div>
+        <button type="button" class="market-close" id="closeBackupRestoreIcon" title="\ub2eb\uae30" aria-label="\ub2eb\uae30">&times;</button>
+      </div>
+      <div class="backup-restore-status" id="backupRestoreStatus" aria-live="polite">\ubc31\uc5c5 \ubaa9\ub85d\uc744 \ubd88\ub7ec\uc624\ub294 \uc911\uc785\ub2c8\ub2e4.</div>
+      <select class="backup-file-list" id="projectBackupSelect" size="9" aria-label="\ubcf5\uc6d0\ud560 \ubc31\uc5c5 \ud30c\uc77c"></select>
+      <div class="actions"><button type="button" class="btn light" id="closeBackupRestore">\ucde8\uc18c</button><button type="button" class="btn" id="confirmProjectBackup" disabled>\uc120\ud0dd\ud55c \ubc31\uc5c5 \ubcf5\uc6d0</button></div>
+    </div>`;
+  document.body.appendChild(backupRestoreModal);
+
   function localPortfolioData() {
     const data = {};
     for (let index = 0; index < localStorage.length; index++) {
@@ -825,14 +938,687 @@
     return data;
   }
 
-  function downloadDataFile(content, type, filename) {
-    const url = URL.createObjectURL(new Blob([content], { type }));
+  function downloadBlobFile(blob, filename) {
+    const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = filename;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
+
+  function downloadDataFile(content, type, filename) {
+    downloadBlobFile(new Blob([content], { type }), filename);
+  }
+
+  function excelTemplateXmlEscape(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  function excelTemplateColumn(index) {
+    let value = index;
+    let result = '';
+    while (value > 0) {
+      value -= 1;
+      result = String.fromCharCode(65 + (value % 26)) + result;
+      value = Math.floor(value / 26);
+    }
+    return result;
+  }
+
+  function excelTemplateInlineCell(reference, value, style = 0) {
+    const text = String(value ?? '');
+    const preserve = /^\s|\s$|\n/.test(text) ? ' xml:space="preserve"' : '';
+    return `<c r="${reference}" s="${style}" t="inlineStr"><is><t${preserve}>${excelTemplateXmlEscape(text)}</t></is></c>`;
+  }
+
+  function excelTemplateFormulaCell(reference, formula, style) {
+    return `<c r="${reference}" s="${style}"><f>${excelTemplateXmlEscape(formula)}</f><v></v></c>`;
+  }
+
+  function excelTemplateRow(rowNumber, values, style = 10) {
+    const cells = values.map((value, index) => excelTemplateInlineCell(`${excelTemplateColumn(index + 1)}${rowNumber}`, value, style)).join('');
+    return `<row r="${rowNumber}" ht="24" customHeight="1">${cells}</row>`;
+  }
+
+  function excelTemplateCrc32(bytes) {
+    if (!excelTemplateCrc32.table) {
+      excelTemplateCrc32.table = Array.from({ length: 256 }, (_, value) => {
+        let crc = value;
+        for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
+        return crc >>> 0;
+      });
+    }
+    let crc = 0xffffffff;
+    bytes.forEach(byte => { crc = excelTemplateCrc32.table[(crc ^ byte) & 0xff] ^ (crc >>> 8); });
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function excelTemplateZip(entries) {
+    const encoder = new TextEncoder();
+    const localParts = [];
+    const centralParts = [];
+    let localOffset = 0;
+    const appendUint16 = (view, offset, value) => view.setUint16(offset, value, true);
+    const appendUint32 = (view, offset, value) => view.setUint32(offset, value >>> 0, true);
+    const now = new Date();
+    const dosTime = ((now.getHours() & 31) << 11) | ((now.getMinutes() & 63) << 5) | ((Math.floor(now.getSeconds() / 2)) & 31);
+    const dosDate = (((now.getFullYear() - 1980) & 127) << 9) | (((now.getMonth() + 1) & 15) << 5) | (now.getDate() & 31);
+    entries.forEach(entry => {
+      const name = encoder.encode(entry.name);
+      const data = typeof entry.content === 'string' ? encoder.encode(entry.content) : entry.content;
+      const crc = excelTemplateCrc32(data);
+      const localHeader = new Uint8Array(30 + name.length);
+      const localView = new DataView(localHeader.buffer);
+      appendUint32(localView, 0, 0x04034b50);
+      appendUint16(localView, 4, 20);
+      appendUint16(localView, 6, 0x0800);
+      appendUint16(localView, 8, 0);
+      appendUint16(localView, 10, dosTime);
+      appendUint16(localView, 12, dosDate);
+      appendUint32(localView, 14, crc);
+      appendUint32(localView, 18, data.length);
+      appendUint32(localView, 22, data.length);
+      appendUint16(localView, 26, name.length);
+      localHeader.set(name, 30);
+      localParts.push(localHeader, data);
+
+      const centralHeader = new Uint8Array(46 + name.length);
+      const centralView = new DataView(centralHeader.buffer);
+      appendUint32(centralView, 0, 0x02014b50);
+      appendUint16(centralView, 4, 20);
+      appendUint16(centralView, 6, 20);
+      appendUint16(centralView, 8, 0x0800);
+      appendUint16(centralView, 10, 0);
+      appendUint16(centralView, 12, dosTime);
+      appendUint16(centralView, 14, dosDate);
+      appendUint32(centralView, 16, crc);
+      appendUint32(centralView, 20, data.length);
+      appendUint32(centralView, 24, data.length);
+      appendUint16(centralView, 28, name.length);
+      appendUint32(centralView, 42, localOffset);
+      centralHeader.set(name, 46);
+      centralParts.push(centralHeader);
+      localOffset += localHeader.length + data.length;
+    });
+    const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+    const end = new Uint8Array(22);
+    const endView = new DataView(end.buffer);
+    appendUint32(endView, 0, 0x06054b50);
+    appendUint16(endView, 4, 0);
+    appendUint16(endView, 6, 0);
+    appendUint16(endView, 8, entries.length);
+    appendUint16(endView, 10, entries.length);
+    appendUint32(endView, 12, centralSize);
+    appendUint32(endView, 16, localOffset);
+    return new Blob([...localParts, ...centralParts, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
+  const excelTemplateStyles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="3"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/><numFmt numFmtId="165" formatCode="yyyy-mm"/><numFmt numFmtId="166" formatCode="#,##0.00;[Red](#,##0.00);-"/></numFmts>
+  <fonts count="6">
+    <font><sz val="10"/><color rgb="FF172634"/><name val="Calibri"/></font>
+    <font><b/><sz val="15"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+    <font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+    <font><sz val="10"/><color rgb="FF0000FF"/><name val="Calibri"/></font>
+    <font><b/><sz val="10"/><color rgb="FF173C49"/><name val="Calibri"/></font>
+    <font><i/><sz val="9"/><color rgb="FF718188"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="6">
+    <fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF153C4B"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF1C7C70"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFFF5DC"/><bgColor indexed="64"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFEAF3F0"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="3"><border/><border><bottom style="thin"><color rgb="FFD7E1DE"/></bottom></border><border><left style="thin"><color rgb="FFD7E1DE"/></left><right style="thin"><color rgb="FFD7E1DE"/></right><top style="thin"><color rgb="FFD7E1DE"/></top><bottom style="thin"><color rgb="FFD7E1DE"/></bottom></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="13">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="3" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="4" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+    <xf numFmtId="0" fontId="3" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="166" fontId="3" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"><alignment horizontal="right" vertical="center"/></xf>
+    <xf numFmtId="164" fontId="3" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="3" fontId="0" fillId="5" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"><alignment horizontal="right" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment wrapText="1" vertical="top"/></xf>
+    <xf numFmtId="165" fontId="3" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment wrapText="1" vertical="top"/></xf>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="center"/></xf>
+    <xf numFmtId="166" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1"><alignment horizontal="right"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>
+</styleSheet>`;
+
+  function excelTemplateInstructionSheet(kind) {
+    const isDividend = kind === 'dividend';
+    const title = isDividend ? 'A MONEY PORTFOLIO · 배당금내역 업로드 양식' : 'A MONEY PORTFOLIO · 거래내역 업로드 양식';
+    const notes = isDividend
+      ? [
+        ['지급월', '필수', 'YYYY-MM 형식으로 입력합니다.', '2026-07'],
+        ['종목', '필수', '설정의 종목명과 동일하게 입력합니다. 없는 종목은 업로드 시 자동 등록됩니다.', 'Vanguard S&P 500 ETF'],
+        ['거래통화', '권장', 'KRW, USD, JPY, EUR, CNY, HKD 중 선택합니다.', 'USD'],
+        ['적용환율', '해외 필수', '배당 지급 시 적용한 원화 환율을 숫자로 입력합니다.', '1380'],
+        ['전체 계좌 기준수량', '필수', '배당락일 직전 기준 전체 계좌 보유수량입니다.', '8'],
+        ['세후 주당 배당금', '필수', '현지통화 기준 세후 주당 금액을 입력합니다.', '1'],
+        ['세후 배당금(원)', '자동 계산', '수량 × 주당 배당금 × 적용환율로 계산됩니다. 필요하면 직접 수정할 수 있습니다.', '11040'],
+        ['배당기준일', '선택', 'YYYY-MM-DD 형식으로 입력합니다.', '2026-06-26'],
+        ['배당락일', '선택', 'YYYY-MM-DD 형식으로 입력합니다.', '2026-06-26'],
+        ['실제지급일', '선택', 'YYYY-MM-DD 형식으로 입력합니다.', '2026-06-30'],
+        ['비고', '선택', '출처나 메모를 자유롭게 입력합니다.', '해외 ETF 배당']
+      ]
+      : [
+        ['일자', '필수', 'YYYY-MM-DD 형식으로 입력합니다.', '2026-08-01'],
+        ['계좌', '필수', '계좌명을 입력합니다. 없는 계좌는 업로드 시 자동 등록됩니다.', 'ISA'],
+        ['종목', '필수', '설정의 종목명과 동일하게 입력합니다. 없는 종목은 업로드 시 자동 등록됩니다.', 'TIGER 미국S&P500'],
+        ['구분', '필수', '매수 또는 매도만 선택합니다.', '매수'],
+        ['수량', '필수', '양수로 입력합니다. 매도는 구분에 따라 자동 처리됩니다.', '10'],
+        ['단가', '필수', '거래통화 기준 1주당 가격입니다.', '28250'],
+        ['거래통화', '권장', 'KRW, USD, JPY, EUR, CNY, HKD 중 선택합니다.', 'KRW'],
+        ['환율', '해외 필수', '원화는 1 또는 공란, 해외는 거래 시 적용 환율을 입력합니다.', '1'],
+        ['금액(원)', '자동 계산', '수량 × 단가 × 환율로 계산됩니다. 필요하면 직접 수정할 수 있습니다.', '282500'],
+        ['수수료(원)', '선택', '원화 기준 수수료를 입력합니다.', '0'],
+        ['세금(원)', '선택', '원화 기준 세금을 입력합니다.', '0'],
+        ['비고', '선택', '거래 메모를 자유롭게 입력합니다.', '정기 매수']
+      ];
+    const rows = [
+      `<row r="1" ht="32" customHeight="1">${excelTemplateInlineCell('A1', title, 1)}</row>`,
+      `<row r="2" ht="34" customHeight="1">${excelTemplateInlineCell('A2', '1) 입력 시트의 헤더명은 변경하지 마세요.  2) 예시는 이 안내 시트에서만 확인하고, 입력 시트에는 실제 데이터만 작성하세요.  3) 파란 글씨 셀은 사용자가 입력하는 항목입니다.', 8)}</row>`,
+      excelTemplateRow(4, ['필드', '필수 여부', '입력 방법', '예시'], 2),
+      ...notes.map((row, index) => excelTemplateRow(index + 5, row, 10))
+    ];
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:D${notes.length + 4}"/><sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="20"/><cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/><col min="3" max="3" width="68" customWidth="1"/><col min="4" max="4" width="29" customWidth="1"/></cols><sheetData>${rows.join('')}</sheetData><mergeCells count="2"><mergeCell ref="A1:D1"/><mergeCell ref="A2:D2"/></mergeCells><autoFilter ref="A4:D${notes.length + 4}"/></worksheet>`;
+  }
+
+  function excelTemplateDataSheet(kind) {
+    const isDividend = kind === 'dividend';
+    const headers = isDividend
+      ? ['지급월', '종목', '거래통화', '적용환율', '전체 계좌 기준수량', '세후 주당 배당금', '세후 배당금(원)', '배당기준일', '배당락일', '실제지급일', '비고']
+      : ['일자', '계좌', '종목', '구분', '수량', '단가', '거래통화', '환율', '금액(원)', '수수료(원)', '세금(원)', '배당기준일', '배당락일', '실제지급일', '비고'];
+    const widths = isDividend ? [13, 29, 13, 14, 21, 21, 20, 15, 15, 15, 34] : [15, 18, 29, 12, 13, 15, 13, 14, 18, 16, 16, 15, 15, 15, 34];
+    const columnStyles = isDividend ? [9, 4, 4, 5, 5, 5, 7, 6, 6, 6, 4] : [6, 4, 4, 4, 5, 5, 4, 5, 7, 5, 5, 6, 6, 6, 4];
+    const formulaColumn = isDividend ? 7 : 9;
+    const formulaRows = [];
+    for (let row = 2; row <= 201; row += 1) {
+      const formula = isDividend
+        ? `IF(OR(E${row}="",F${row}=""),"",ROUND(E${row}*F${row}*IF(D${row}="",1,D${row}),0))`
+        : `IF(OR(E${row}="",F${row}=""),"",ROUND(ABS(E${row}*F${row}*IF(H${row}="",1,H${row})),0))`;
+      formulaRows.push(`<row r="${row}" ht="21" customHeight="1">${excelTemplateFormulaCell(`${excelTemplateColumn(formulaColumn)}${row}`, formula, 7)}</row>`);
+    }
+    const columns = widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1" style="${columnStyles[index]}"/>`).join('');
+    const headerCells = headers.map((header, index) => excelTemplateInlineCell(`${excelTemplateColumn(index + 1)}1`, header, 2)).join('');
+    const validations = isDividend
+      ? '<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" errorTitle="입력 확인" error="목록에서 통화를 선택해주세요." sqref="C2:C201"><formula1>&quot;KRW,USD,JPY,EUR,CNY,HKD&quot;</formula1></dataValidation></dataValidations>'
+      : '<dataValidations count="2"><dataValidation type="list" allowBlank="0" showErrorMessage="1" errorTitle="입력 확인" error="매수 또는 매도를 선택해주세요." sqref="D2:D201"><formula1>&quot;매수,매도&quot;</formula1></dataValidation><dataValidation type="list" allowBlank="1" showErrorMessage="1" errorTitle="입력 확인" error="목록에서 통화를 선택해주세요." sqref="G2:G201"><formula1>&quot;KRW,USD,JPY,EUR,CNY,HKD&quot;</formula1></dataValidation></dataValidations>';
+    const lastColumn = excelTemplateColumn(headers.length);
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}201"/><sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="21"/><cols>${columns}</cols><sheetData><row r="1" ht="36" customHeight="1">${headerCells}</row>${formulaRows.join('')}</sheetData><autoFilter ref="A1:${lastColumn}201"/>${validations}<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`;
+  }
+
+  function buildExcelUploadTemplate(kind) {
+    const isDividend = kind === 'dividend';
+    const dataSheetName = isDividend ? '배당금내역' : '거래내역';
+    const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr date1904="0"/><bookViews><workbookView activeTab="0"/></bookViews><sheets><sheet name="${dataSheetName}" sheetId="1" r:id="rId1"/><sheet name="작성안내" sheetId="2" r:id="rId2"/></sheets><calcPr calcId="191029" calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>`;
+    const entries = [
+      { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>` },
+      { name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>` },
+      { name: 'docProps/core.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${excelTemplateXmlEscape(dataSheetName)} 업로드 양식</dc:title><dc:creator>A MONEY PORTFOLIO</dc:creator><cp:lastModifiedBy>A MONEY PORTFOLIO</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">2026-08-14T00:00:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2026-08-14T00:00:00Z</dcterms:modified></cp:coreProperties>` },
+      { name: 'docProps/app.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>A MONEY PORTFOLIO</Application><AppVersion>1.0</AppVersion></Properties>` },
+      { name: 'xl/workbook.xml', content: workbook },
+      { name: 'xl/_rels/workbook.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+      { name: 'xl/styles.xml', content: excelTemplateStyles },
+      { name: 'xl/worksheets/sheet1.xml', content: excelTemplateDataSheet(kind) },
+      { name: 'xl/worksheets/sheet2.xml', content: excelTemplateInstructionSheet(kind) }
+    ];
+    return excelTemplateZip(entries);
+  }
+
+  function downloadExcelUploadTemplate(kind) {
+    const isDividend = kind === 'dividend';
+    const filename = isDividend ? 'a-money-배당금내역-업로드-양식.xlsx' : 'a-money-거래내역-업로드-양식.xlsx';
+    downloadBlobFile(buildExcelUploadTemplate(kind), filename);
+  }
+
+  function xlsxUint16(view, offset) {
+    return view.getUint16(offset, true);
+  }
+
+  function xlsxUint32(view, offset) {
+    return view.getUint32(offset, true);
+  }
+
+  function normalizeZipPath(base, target) {
+    const parts = (target.startsWith('/') ? target.slice(1) : `${base}/${target}`).split('/');
+    const normalized = [];
+    parts.forEach(part => {
+      if (!part || part === '.') return;
+      if (part === '..') normalized.pop();
+      else normalized.push(part);
+    });
+    return normalized.join('/');
+  }
+
+  function xlsxZipDirectory(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const view = new DataView(arrayBuffer);
+    let endOffset = -1;
+    const minimum = Math.max(0, bytes.length - 65557);
+    for (let offset = bytes.length - 22; offset >= minimum; offset -= 1) {
+      if (xlsxUint32(view, offset) === 0x06054b50) {
+        endOffset = offset;
+        break;
+      }
+    }
+    if (endOffset < 0) throw new Error('\uc815\uc0c1\uc801\uc778 .xlsx ZIP \uad6c\uc870\uac00 \uc544\ub2d9\ub2c8\ub2e4.');
+    const entryCount = xlsxUint16(view, endOffset + 10);
+    let offset = xlsxUint32(view, endOffset + 16);
+    const entries = new Map();
+    const decoder = new TextDecoder('utf-8');
+    for (let index = 0; index < entryCount; index += 1) {
+      if (xlsxUint32(view, offset) !== 0x02014b50) throw new Error('Excel ZIP \ubaa9\ub85d\uc744 \uc77d\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.');
+      const flags = xlsxUint16(view, offset + 8);
+      const method = xlsxUint16(view, offset + 10);
+      const compressedSize = xlsxUint32(view, offset + 20);
+      const nameLength = xlsxUint16(view, offset + 28);
+      const extraLength = xlsxUint16(view, offset + 30);
+      const commentLength = xlsxUint16(view, offset + 32);
+      const localOffset = xlsxUint32(view, offset + 42);
+      const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + nameLength));
+      entries.set(name, { name, flags, method, compressedSize, localOffset });
+      offset += 46 + nameLength + extraLength + commentLength;
+    }
+    return { bytes, view, entries };
+  }
+
+  async function xlsxEntryText(zip, name) {
+    const entry = zip.entries.get(name);
+    if (!entry) return '';
+    if (entry.flags & 1) throw new Error('\uc554\ud638\ud654\ub41c Excel \ud30c\uc77c\uc740 \uc5c5\ub85c\ub4dc\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.');
+    const offset = entry.localOffset;
+    if (xlsxUint32(zip.view, offset) !== 0x04034b50) throw new Error('Excel ZIP \ub370\uc774\ud130\ub97c \uc77d\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.');
+    const nameLength = xlsxUint16(zip.view, offset + 26);
+    const extraLength = xlsxUint16(zip.view, offset + 28);
+    const start = offset + 30 + nameLength + extraLength;
+    const compressed = zip.bytes.slice(start, start + entry.compressedSize);
+    let decoded;
+    if (entry.method === 0) {
+      decoded = compressed;
+    } else if (entry.method === 8) {
+      if (typeof DecompressionStream !== 'function') throw new Error('\uc774 \ube0c\ub77c\uc6b0\uc800\ub294 Excel \uc555\ucd95 \ud574\uc81c\ub97c \uc9c0\uc6d0\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.');
+      try {
+        decoded = new Uint8Array(await new Response(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      } catch {
+        throw new Error('Excel \uc555\ucd95 \ub370\uc774\ud130\ub97c \ud574\uc81c\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.');
+      }
+    } else {
+      throw new Error(`\uc9c0\uc6d0\ud558\uc9c0 \uc54a\ub294 Excel \uc555\ucd95 \ubc29\uc2dd\uc785\ub2c8\ub2e4. (${entry.method})`);
+    }
+    return new TextDecoder('utf-8').decode(decoded);
+  }
+
+  function parseExcelXml(text, label) {
+    const documentNode = new DOMParser().parseFromString(text, 'application/xml');
+    if (documentNode.getElementsByTagName('parsererror').length) throw new Error(`${label} XML\uc744 \uc77d\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.`);
+    return documentNode;
+  }
+
+  function excelColumnIndex(reference) {
+    const letters = String(reference || '').match(/^[A-Z]+/i)?.[0]?.toUpperCase() || '';
+    return [...letters].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+  }
+
+  async function readExcelWorkbook(file, kind) {
+    if (!file.name.toLowerCase().endsWith('.xlsx')) throw new Error('.xlsx \ud615\uc2dd\ub9cc \uc9c0\uc6d0\ud569\ub2c8\ub2e4. Excel\uc5d0\uc11c .xlsx\ub85c \ub2e4\uc2dc \uc800\uc7a5\ud574\uc8fc\uc138\uc694.');
+    if (file.size > 20 * 1024 * 1024) throw new Error('Excel \ud30c\uc77c\uc740 20MB \uc774\ud558\ub9cc \uc5c5\ub85c\ub4dc\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.');
+    const zip = xlsxZipDirectory(await file.arrayBuffer());
+    const workbookText = await xlsxEntryText(zip, 'xl/workbook.xml');
+    const relationshipsText = await xlsxEntryText(zip, 'xl/_rels/workbook.xml.rels');
+    if (!workbookText || !relationshipsText) throw new Error('Excel \ud1b5\ud569\ubb38\uc11c\uc758 \uc2dc\ud2b8 \uc815\ubcf4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.');
+    const workbookXml = parseExcelXml(workbookText, 'workbook');
+    const relationshipsXml = parseExcelXml(relationshipsText, 'relationships');
+    const relationTargets = new Map([...relationshipsXml.getElementsByTagName('Relationship')].map(node => [node.getAttribute('Id'), node.getAttribute('Target')]));
+    const sheets = [...workbookXml.getElementsByTagName('sheet')].map(node => ({
+      name: node.getAttribute('name') || '',
+      relationId: node.getAttribute('r:id') || node.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')
+    }));
+    if (!sheets.length) throw new Error('Excel \ud30c\uc77c\uc5d0 \uc2dc\ud2b8\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.');
+    const preferred = kind === 'dividend'
+      ? ['\ubc30\ub2f9', 'dividend', '\uac70\ub798', '\ub9e4\ub9e4', 'transaction']
+      : ['\uac70\ub798', '\ub9e4\ub9e4', 'transaction'];
+    const selected = sheets.find(sheet => preferred.some(term => sheet.name.toLowerCase().includes(term))) || sheets[0];
+    const target = relationTargets.get(selected.relationId);
+    if (!target) throw new Error(`'${selected.name}' \uc2dc\ud2b8 \ud30c\uc77c\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.`);
+    const sheetPath = normalizeZipPath('xl', target);
+    const sheetText = await xlsxEntryText(zip, sheetPath);
+    if (!sheetText) throw new Error(`'${selected.name}' \uc2dc\ud2b8\uac00 \ube44\uc5b4 \uc788\uc2b5\ub2c8\ub2e4.`);
+    const sharedText = await xlsxEntryText(zip, 'xl/sharedStrings.xml');
+    const sharedStrings = sharedText
+      ? [...parseExcelXml(sharedText, 'sharedStrings').getElementsByTagName('si')].map(item => [...item.getElementsByTagName('t')].map(node => node.textContent || '').join(''))
+      : [];
+    const sheetXml = parseExcelXml(sheetText, selected.name);
+    const rows = [...sheetXml.getElementsByTagName('row')].map((rowNode, rowIndex) => {
+      const values = [];
+      [...rowNode.getElementsByTagName('c')].forEach((cell, cellIndex) => {
+        const column = Math.max(0, excelColumnIndex(cell.getAttribute('r')) >= 0 ? excelColumnIndex(cell.getAttribute('r')) : cellIndex);
+        const type = cell.getAttribute('t') || '';
+        const valueNode = cell.getElementsByTagName('v')[0];
+        const raw = valueNode?.textContent ?? '';
+        if (type === 's') values[column] = sharedStrings[Number(raw)] ?? '';
+        else if (type === 'inlineStr') values[column] = [...cell.getElementsByTagName('t')].map(node => node.textContent || '').join('');
+        else if (type === 'str') values[column] = raw;
+        else if (type === 'b') values[column] = raw === '1';
+        else values[column] = raw === '' ? '' : Number.isFinite(Number(raw)) ? Number(raw) : raw;
+      });
+      return { rowNumber: Number(rowNode.getAttribute('r')) || rowIndex + 1, values };
+    }).filter(row => row.values.some(value => String(value ?? '').trim() !== ''));
+    const date1904 = workbookXml.getElementsByTagName('workbookPr')[0]?.getAttribute('date1904') === '1';
+    return { sheetName: selected.name, rows, date1904 };
+  }
+
+  function normalizeExcelHeader(value) {
+    return String(value ?? '').trim().toLowerCase().replace(/[\s\u00b7._\-()（）/]/g, '');
+  }
+
+  const excelHeaderAliases = {
+    date: ['\uc77c\uc790', '\ub0a0\uc9dc', '\uac70\ub798\uc77c', '\uac70\ub798\uc77c\uc2dc', '\uac70\ub798\uc77c\uc9c0\uae09\uc6d4', '\uc9c0\uae09\uc6d4', '\uc9c0\uae09\uc77c'],
+    account: ['\uacc4\uc88c', '\uac70\ub798\uacc4\uc88c', '\uacc4\uc88c\uba85'],
+    asset: ['\uc885\ubaa9', '\uc885\ubaa9\uba85', '\uc790\uc0b0', '\uc790\uc0b0\uba85'],
+    type: ['\uad6c\ubd84', '\uc720\ud615', '\uac70\ub798\uad6c\ubd84', '\uac70\ub798\ub0b4\uc6a9'],
+    quantity: ['\uc218\ub7c9', '\uae30\uc900\uc218\ub7c9', '\uc804\uccb4\uacc4\uc88c\uae30\uc900\uc218\ub7c9'],
+    price: ['\ub2e8\uac00', '\uac70\ub798\uac00\uaca9', '\uc8fc\ub2f9\ubc30\ub2f9\uae08', '\uc138\ud6c4\uc8fc\ub2f9\ubc30\ub2f9\uae08'],
+    currency: ['\uac70\ub798\ud1b5\ud654', '\ud1b5\ud654', '\uae30\uc900\ud1b5\ud654'],
+    fxRate: ['\ud658\uc728', '\uc801\uc6a9\ud658\uc728'],
+    amount: ['\uae08\uc561\uc6d0', '\uc6d0\ud654\uae08\uc561', '\uac70\ub798\uae08\uc561', '\uac70\ub798\uae08\uc561\uc6d0', '\ubc30\ub2f9\uc6d0', '\ubc30\ub2f9\uc21c\uc218\ub839\uc561\uc6d0', '\uc138\ud6c4\ubc30\ub2f9\uae08\uc6d0', '\uc138\ud6c4\ubc30\ub2f9\uae08'],
+    localAmount: ['\uac70\ub798\uae08\uc561\uac70\ub798\ud1b5\ud654', '\ud604\uc9c0\ud1b5\ud654\uae08\uc561', '\uc138\ud6c4\ubc30\ub2f9\uae08\uac70\ub798\ud1b5\ud654'],
+    fee: ['\uc218\uc218\ub8cc', '\uc218\uc218\ub8cc\uc6d0'],
+    tax: ['\uc138\uae08', '\uc138\uae08\uc6d0', '\uc6d0\ucc9c\uc9d5\uc218', '\uc6d0\ucc9c\uc9d5\uc218\uc6d0'],
+    recordDate: ['\ubc30\ub2f9\uae30\uc900\uc77c', '\uae30\uc900\uc77c'],
+    exDividendDate: ['\ubc30\ub2f9\ub77d\uc77c'],
+    paymentDate: ['\uc2e4\uc81c\uc9c0\uae09\uc77c', '\ubc30\ub2f9\uc9c0\uae09\uc77c'],
+    note: ['\ube44\uace0', '\uba54\ubaa8', '\uc8fc\uc11d']
+  };
+
+  const excelKnownHeaders = new Set(Object.values(excelHeaderAliases).flat());
+
+  function excelHeaderRowIndex(rows) {
+    let selected = -1;
+    let highestScore = 0;
+    rows.slice(0, 30).forEach((row, index) => {
+      const score = row.values.reduce((sum, value) => sum + (excelKnownHeaders.has(normalizeExcelHeader(value)) ? 1 : 0), 0);
+      if (score > highestScore) {
+        highestScore = score;
+        selected = index;
+      }
+    });
+    if (highestScore < 2) throw new Error('\ud544\uc218 \uc5f4\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. \uc77c\uc790\u00b7\uc885\ubaa9\u00b7\uad6c\ubd84 \ub4f1\uc758 \ud5e4\ub354\ub97c \ud655\uc778\ud574\uc8fc\uc138\uc694.');
+    return selected;
+  }
+
+  function excelCellMap(headers, values) {
+    const cells = new Map();
+    headers.forEach((header, index) => {
+      const key = normalizeExcelHeader(header);
+      if (key) cells.set(key, values[index] ?? '');
+    });
+    return cells;
+  }
+
+  function excelCell(cells, aliasName) {
+    for (const alias of excelHeaderAliases[aliasName]) {
+      if (cells.has(alias)) return { header: alias, value: cells.get(alias) };
+    }
+    return { header: '', value: '' };
+  }
+
+  function excelNumber(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const text = String(value ?? '').trim();
+    if (!text) return 0;
+    const negative = /^\(.*\)$/.test(text);
+    const match = text.replace(/,/g, '').match(/[-+]?\d+(?:\.\d+)?/);
+    const result = match ? Number(match[0]) : 0;
+    return negative ? -Math.abs(result) : result;
+  }
+
+  function excelDate(value, date1904 = false) {
+    if (typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(String(value ?? '').trim())) {
+      const serial = Number(value);
+      if (serial > 1000 && serial < 100000) {
+        const epoch = Date.UTC(date1904 ? 1904 : 1899, date1904 ? 0 : 11, date1904 ? 1 : 30);
+        return new Date(epoch + Math.floor(serial) * 86400000).toISOString().slice(0, 10);
+      }
+    }
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    const compact = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+    const match = text.match(/^(\d{4})\D+(\d{1,2})(?:\D+(\d{1,2}))?/);
+    if (!match) return '';
+    return `${match[1]}-${String(match[2]).padStart(2, '0')}${match[3] ? `-${String(match[3]).padStart(2, '0')}` : ''}`;
+  }
+
+  function excelTransactionType(value, quantity) {
+    const text = String(value ?? '').trim().toLowerCase();
+    if (['\ub9e4\uc218', '\ub9e4\uc785', 'buy'].includes(text)) return '\ub9e4\uc218';
+    if (['\ub9e4\ub3c4', '\ub9e4\uac01', 'sell'].includes(text)) return '\ub9e4\ub3c4';
+    if (['\ubc30\ub2f9', '\ubc30\ub2f9\uae08', 'dividend'].includes(text)) return '\ubc30\ub2f9';
+    if (!text && number(quantity) < 0) return '\ub9e4\ub3c4';
+    return '';
+  }
+
+  function excelCurrency(value, fallbackText, master, account) {
+    const joined = `${value ?? ''} ${fallbackText ?? ''}`.toUpperCase();
+    const explicit = joined.match(/\b(KRW|USD|JPY|EUR|CNY|HKD)\b/)?.[1];
+    return explicit || master?.currency || account?.currency || 'KRW';
+  }
+
+  function importTransactionKey(item) {
+    const rounded = value => number(value).toFixed(4);
+    return item.type === '\ubc30\ub2f9'
+      ? [item.type, item.date, item.asset, item.currency, rounded(item.amount), item.recordDate || '', item.exDividendDate || ''].join('\u0001')
+      : [item.type, item.date, item.account, item.asset, item.currency, rounded(item.qty), rounded(item.price), rounded(item.amount)].join('\u0001');
+  }
+
+  function stageImportedReferenceData(items) {
+    let accountsChanged = false;
+    let mastersChanged = false;
+    items.forEach(item => {
+      const existingAccount = accounts.find(account => account.name === item.account);
+      if (item.account && !existingAccount) {
+        accounts.push({
+          name: item.account,
+          broker: item.account,
+          market: item.currency === 'KRW' ? '\uad6d\ub0b4' : '\ud574\uc678',
+          currency: item.currency,
+          defaultFx: item.currency === 'KRW' ? 1 : number(item.fxRate)
+        });
+        accountsChanged = true;
+      } else if (existingAccount && item.currency !== 'KRW' && (existingAccount.market !== '\ud574\uc678' || existingAccount.currency !== item.currency)) {
+        existingAccount.market = '\ud574\uc678';
+        existingAccount.currency = item.currency;
+        existingAccount.defaultFx = number(existingAccount.defaultFx) || number(item.fxRate);
+        accountsChanged = true;
+      }
+      const existingMaster = masters.find(master => master.name === item.asset);
+      if (item.asset && !existingMaster) {
+        masters.push({
+          name: item.asset,
+          code: '',
+          price: number(item.price),
+          risk: '\ubbf8\ubd84\ub958',
+          country: item.currency === 'KRW' ? '\ud55c\uad6d' : '\ud574\uc678',
+          category: '\ubbf8\ubd84\ub958',
+          currency: item.currency,
+          market: item.currency === 'KRW' ? '\uad6d\ub0b4' : '\ud574\uc678',
+          strategy: ''
+        });
+        mastersChanged = true;
+      } else if (existingMaster && item.currency !== 'KRW' && (existingMaster.market !== '\ud574\uc678' || existingMaster.currency !== item.currency)) {
+        existingMaster.market = '\ud574\uc678';
+        existingMaster.currency = item.currency;
+        existingMaster.price = number(existingMaster.price) || number(item.price);
+        mastersChanged = true;
+      }
+    });
+    if (accountsChanged) saveAccounts();
+    if (mastersChanged) localStorage.setItem('wb-security-masters', JSON.stringify(masters));
+    if (accountsChanged) renderAccounts();
+    if (mastersChanged) renderMasters();
+  }
+
+  async function importExcelTransactions(file, kind) {
+    const workbook = await readExcelWorkbook(file, kind);
+    const headerIndex = excelHeaderRowIndex(workbook.rows);
+    const headers = workbook.rows[headerIndex].values;
+    const dataRows = workbook.rows.slice(headerIndex + 1);
+    const imported = [];
+    const errors = [];
+    let ignored = 0;
+    dataRows.forEach(row => {
+      const cells = excelCellMap(headers, row.values);
+      const asset = String(excelCell(cells, 'asset').value ?? '').trim();
+      const rawQuantity = excelNumber(excelCell(cells, 'quantity').value);
+      let type = excelTransactionType(excelCell(cells, 'type').value, rawQuantity);
+      if (kind === 'dividend') {
+        if (type && type !== '\ubc30\ub2f9') {
+          ignored += 1;
+          return;
+        }
+        type = '\ubc30\ub2f9';
+      }
+      const rawDate = excelDate(excelCell(cells, 'date').value, workbook.date1904);
+      const date = type === '\ubc30\ub2f9' ? rawDate.slice(0, 7) : rawDate;
+      const accountName = type === '\ubc30\ub2f9' ? '' : String(excelCell(cells, 'account').value ?? '').trim();
+      if (!asset || !date || !type || (type !== '\ubc30\ub2f9' && !accountName)) {
+        errors.push(`${row.rowNumber}\ud589: ${!date ? '\uc77c\uc790' : !accountName && type !== '\ubc30\ub2f9' ? '\uacc4\uc88c' : !asset ? '\uc885\ubaa9' : '\uad6c\ubd84'} \ub204\ub77d`);
+        return;
+      }
+      if (!['\ub9e4\uc218', '\ub9e4\ub3c4', '\ubc30\ub2f9'].includes(type)) {
+        errors.push(`${row.rowNumber}\ud589: \uad6c\ubd84\uc740 \ub9e4\uc218\u00b7\ub9e4\ub3c4\u00b7\ubc30\ub2f9\ub9cc \uc9c0\uc6d0`);
+        return;
+      }
+      const master = masters.find(item => item.name === asset);
+      const account = accounts.find(item => item.name === accountName);
+      const amountCell = excelCell(cells, 'amount');
+      const localAmountCell = excelCell(cells, 'localAmount');
+      const currency = excelCurrency(excelCell(cells, 'currency').value, `${amountCell.value} ${localAmountCell.value}`, master, account);
+      const fxRate = currency === 'KRW' ? 1 : excelNumber(excelCell(cells, 'fxRate').value) || currentExchangeRate(currency, master?.fxRate, account?.defaultFx);
+      if (currency !== 'KRW' && !fxRate) {
+        errors.push(`${row.rowNumber}\ud589: ${currency} \ud658\uc728 \ub204\ub77d`);
+        return;
+      }
+      const recordDate = excelDate(excelCell(cells, 'recordDate').value, workbook.date1904);
+      const exDividendDate = excelDate(excelCell(cells, 'exDividendDate').value, workbook.date1904) || (type === '\ubc30\ub2f9' ? previousBusinessDay(recordDate) : '');
+      const paymentDate = excelDate(excelCell(cells, 'paymentDate').value, workbook.date1904);
+      const effectiveDate = exDividendDate || recordDate || (date.length === 7 ? `${date}-31` : date);
+      const quantity = Math.abs(rawQuantity) || (type === '\ubc30\ub2f9' ? quantityHeldOnDate('', asset, effectiveDate, true) : 0);
+      const importedPrice = Math.abs(excelNumber(excelCell(cells, 'price').value));
+      let localAmount = Math.abs(excelNumber(localAmountCell.value));
+      let amountKrw = Math.abs(excelNumber(amountCell.value));
+      const amountHeaderIsKrw = /\uc6d0$/.test(amountCell.header) || currency === 'KRW';
+      if (amountKrw && !amountHeaderIsKrw && !localAmount) {
+        localAmount = amountKrw;
+        amountKrw *= fxRate || 1;
+      }
+      if (!localAmount && amountKrw) localAmount = amountKrw / (fxRate || 1);
+      if (!amountKrw && localAmount) amountKrw = localAmount * (fxRate || 1);
+      if (!amountKrw && quantity && importedPrice) {
+        localAmount = quantity * importedPrice;
+        amountKrw = localAmount * (fxRate || 1);
+      }
+      if (!amountKrw || (!quantity && type !== '\ubc30\ub2f9')) {
+        errors.push(`${row.rowNumber}\ud589: ${!quantity ? '\uc218\ub7c9' : '\uae08\uc561'} \ub204\ub77d`);
+        return;
+      }
+      const price = importedPrice || (quantity ? localAmount / quantity : 0);
+      const sign = type === '\ub9e4\ub3c4' ? -1 : 1;
+      imported.push({
+        date,
+        account: accountName,
+        asset,
+        type,
+        qty: type === '\ubc30\ub2f9' ? quantity : quantity * sign,
+        price,
+        currency,
+        fxRate: fxRate || 1,
+        localAmount,
+        amount: amountKrw * sign,
+        fee: type === '\ubc30\ub2f9' ? 0 : Math.abs(excelNumber(excelCell(cells, 'fee').value)),
+        tax: type === '\ubc30\ub2f9' ? 0 : Math.abs(excelNumber(excelCell(cells, 'tax').value)),
+        recordDate: type === '\ubc30\ub2f9' ? recordDate : '',
+        exDividendDate: type === '\ubc30\ub2f9' ? exDividendDate : '',
+        paymentDate: type === '\ubc30\ub2f9' ? paymentDate : '',
+        note: String(excelCell(cells, 'note').value ?? '').trim()
+      });
+    });
+
+    const existingKeys = new Set(transactions.map(importTransactionKey));
+    const unique = [];
+    let duplicates = 0;
+    imported.forEach(item => {
+      const key = importTransactionKey(item);
+      if (existingKeys.has(key)) {
+        duplicates += 1;
+        return;
+      }
+      existingKeys.add(key);
+      unique.push(item);
+    });
+    if (!unique.length) {
+      const details = [];
+      if (duplicates) details.push(`\uc911\ubcf5 ${duplicates}\uac74\uc740 \ucd94\uac00\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.`);
+      if (ignored) details.push(`\ub2e4\ub978 \uac70\ub798\uad6c\ubd84 ${ignored}\uac74\uc740 \uc81c\uc678\ud588\uc2b5\ub2c8\ub2e4.`);
+      if (errors.length) details.push(errors.slice(0, 5).join('\n'));
+      const detail = details.length ? `\n${details.join('\n')}` : '';
+      throw new Error(`\ucd94\uac00\ud560 ${kind === 'dividend' ? '\ubc30\ub2f9' : '\uac70\ub798'} \ub0b4\uc5ed\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.${detail}`);
+    }
+    const summary = [`\ud30c\uc77c: ${file.name}`, `\uc2dc\ud2b8: ${workbook.sheetName}`, `\ucd94\uac00 ${unique.length}\uac74`];
+    if (duplicates) summary.push(`\uc911\ubcf5 \uc81c\uc678 ${duplicates}\uac74`);
+    if (ignored) summary.push(`\ub2e4\ub978 \uad6c\ubd84 \uc81c\uc678 ${ignored}\uac74`);
+    if (errors.length) summary.push(`\uc624\ub958 \uc81c\uc678 ${errors.length}\uac74\n${errors.slice(0, 5).join('\n')}`);
+    if (!confirm(`${summary.join('\n')}\n\n\uae30\uc874 \ub370\uc774\ud130\uc5d0 \ubcd1\ud569\ud560\uae4c\uc694?`)) return;
+    stageImportedReferenceData(unique);
+    transactions.unshift(...unique);
+    save();
+    window.render();
+    renderPerformance();
+    updateDataManagementStats();
+    if (kind === 'dividend' && unique.some(item => !item.recordDate || !item.exDividendDate)) setTimeout(() => refreshDividendSchedules(false), 0);
+    alert(`${kind === 'dividend' ? '\ubc30\ub2f9\uae08' : '\uac70\ub798'} \ub0b4\uc5ed ${unique.length}\uac74\uc744 \ucd94\uac00\ud588\uc2b5\ub2c8\ub2e4.${duplicates ? `\n\uc911\ubcf5 ${duplicates}\uac74\uc740 \uc81c\uc678\ud588\uc2b5\ub2c8\ub2e4.` : ''}`);
+  }
+
+  async function handleExcelUpload(input, kind, button) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Excel \ud655\uc778 \uc911';
+    try {
+      await importExcelTransactions(file, kind);
+    } catch (error) {
+      alert(`Excel \ud30c\uc77c\uc744 \ubd88\ub7ec\uc624\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.\n${error.message || '\ud30c\uc77c \ud615\uc2dd\uacfc \uc5f4 \uc774\ub984\uc744 \ud655\uc778\ud574\uc8fc\uc138\uc694.'}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+
+  transactionExcelButton.onclick = () => transactionExcelInput.click();
+  dividendExcelButton.onclick = () => dividendExcelInput.click();
+  transactionTemplateButton.onclick = () => downloadExcelUploadTemplate('transactions');
+  dividendTemplateButton.onclick = () => downloadExcelUploadTemplate('dividend');
+  transactionExcelInput.onchange = () => handleExcelUpload(transactionExcelInput, 'transactions', transactionExcelButton);
+  dividendExcelInput.onchange = () => handleExcelUpload(dividendExcelInput, 'dividend', dividendExcelButton);
 
   const arrayStorageKeys = ['wb-assets', 'wb-transactions', 'wb-goals', 'wb-accounts', 'wb-security-masters', 'wb-safe-assets'];
   const objectStorageKeys = ['wb-fx-rates', 'wb-market-signals'];
@@ -871,10 +1657,11 @@
     byId('dataSafeCount').textContent = `${(window.WB_SAFE || []).length.toLocaleString('ko-KR')}\uac1c`;
     byId('dataStorageSize').textContent = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${Math.max(1, Math.round(bytes / 1024)).toLocaleString('ko-KR')} KB`;
     const lastBackup = localStorage.getItem('wb-last-backup-at');
-    byId('lastBackupText').textContent = lastBackup ? `\ucd5c\uadfc \ubc31\uc5c5 ${new Date(lastBackup).toLocaleString('ko-KR')}` : '\ucd5c\uadfc \ubc31\uc5c5 \uae30\ub85d \uc5c6\uc74c';
+    const lastBackupPath = localStorage.getItem('wb-last-backup-path');
+    byId('lastBackupText').textContent = lastBackup ? `\ucd5c\uadfc \ubc31\uc5c5 ${new Date(lastBackup).toLocaleString('ko-KR')}${lastBackupPath ? ` \u00b7 ${lastBackupPath}` : ''}` : '\ucd5c\uadfc \ubc31\uc5c5 \uae30\ub85d \uc5c6\uc74c';
   }
 
-  byId('exportBackup').onclick = () => {
+  byId('exportBackup').onclick = async () => {
     const data = localPortfolioData();
     const counts = { transactions: transactions.length, accounts: accounts.length, masters: securityMasters().length, savings: (window.WB_SAFE || []).length };
     const payload = JSON.stringify({
@@ -884,34 +1671,115 @@
       counts,
       data
     }, null, 2);
-    downloadDataFile(payload, 'application/json;charset=utf-8', `a-money-portfolio-\uc804\uccb4\ubc31\uc5c5-${today()}.json`);
-    localStorage.setItem('wb-last-backup-at', new Date().toISOString());
-    updateDataManagementStats();
+    const button = byId('exportBackup');
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = '\ubc31\uc5c5 \uc800\uc7a5 \uc911';
+    try {
+      const response = await fetch('/api/backup', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: payload });
+      const result = await response.json();
+      if (!response.ok || !result.saved) throw new Error(result.error || '\ubc31\uc5c5 \uc800\uc7a5 \uc2e4\ud328');
+      localStorage.setItem('wb-last-backup-at', result.savedAt || new Date().toISOString());
+      localStorage.setItem('wb-last-backup-path', result.relativePath || `\ubc31\uc5c5\ud30c\uc77c\\${result.fileName}`);
+      updateDataManagementStats();
+      alert(`\uc804\uccb4 \ubc31\uc5c5\uc744 \uc800\uc7a5\ud588\uc2b5\ub2c8\ub2e4.\n${result.relativePath || result.fileName}`);
+    } catch (error) {
+      alert(`\ud504\ub85c\uc81d\ud2b8 \ubc31\uc5c5\ud30c\uc77c \ud3f4\ub354\uc5d0 \uc800\uc7a5\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.\n${error.message || '\ub85c\uceec \uc11c\ubc84\ub97c \ud655\uc778\ud558\uc138\uc694.'}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
   };
+
+  async function restoreBackupPayload(payload, sourceLabel = '\ubc31\uc5c5 \ud30c\uc77c') {
+    if (!['A_MONEY_PORTFOLIO', 'WEALTHBOARD'].includes(payload.application)) throw new Error('\uc9c0\uc6d0\ud558\uc9c0 \uc54a\ub294 \ubc31\uc5c5 \ud615\uc2dd\uc785\ub2c8\ub2e4.');
+    const validation = validatePortfolioStorage(payload.data);
+    if (validation.errors.length) throw new Error(validation.errors.slice(0, 3).join('\n'));
+    const transactionCount = JSON.parse(payload.data['wb-transactions'] || '[]').length;
+    if (!confirm(`${sourceLabel}\n\uac70\ub798 ${transactionCount.toLocaleString('ko-KR')}\uac74\uc744 \ud3ec\ud568\ud55c \uc804\uccb4 \ub370\uc774\ud130\ub85c \uad50\uccb4\ud560\uae4c\uc694?\n\ud604\uc7ac \ub370\uc774\ud130\ub294 \ub36e\uc5b4\uc501\ub2c8\ub2e4.`)) return false;
+    const previous = localPortfolioData();
+    try {
+      Object.keys(previous).forEach(key => localStorage.removeItem(key));
+      Object.entries(payload.data).forEach(([key, value]) => localStorage.setItem(key, value));
+    } catch (error) {
+      Object.keys(localPortfolioData()).forEach(key => localStorage.removeItem(key));
+      Object.entries(previous).forEach(([key, value]) => localStorage.setItem(key, value));
+      throw error;
+    }
+    location.reload();
+    return true;
+  }
+
+  async function openProjectBackupRestore() {
+    const select = byId('projectBackupSelect');
+    const status = byId('backupRestoreStatus');
+    const confirmButton = byId('confirmProjectBackup');
+    select.innerHTML = '';
+    confirmButton.disabled = true;
+    status.textContent = '\ubc31\uc5c5 \ubaa9\ub85d\uc744 \ubd88\ub7ec\uc624\ub294 \uc911\uc785\ub2c8\ub2e4.';
+    openModal('backupRestoreModal');
+    try {
+      const response = await fetch('/api/backups');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '\ubc31\uc5c5 \ubaa9\ub85d \uc870\ud68c \uc2e4\ud328');
+      const items = Array.isArray(result.items) ? result.items : [];
+      select.innerHTML = items.map(item => {
+        const modified = item.modifiedAt ? new Date(item.modifiedAt).toLocaleString('ko-KR') : '-';
+        const size = `${Math.max(1, Math.round(number(item.size) / 1024)).toLocaleString('ko-KR')} KB`;
+        return `<option value="${esc(item.fileName)}">${esc(item.fileName)}  \u00b7  ${modified}  \u00b7  ${size}</option>`;
+      }).join('');
+      if (items.length) {
+        select.selectedIndex = 0;
+        confirmButton.disabled = false;
+        status.textContent = `${result.folder || '\ubc31\uc5c5\ud30c\uc77c'} \ud3f4\ub354 \u00b7 ${items.length.toLocaleString('ko-KR')}\uac1c`;
+      } else {
+        status.textContent = '\ubc31\uc5c5\ud30c\uc77c \ud3f4\ub354\uc5d0 JSON \ubc31\uc5c5\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.';
+      }
+    } catch (error) {
+      status.textContent = `\ubc31\uc5c5 \ubaa9\ub85d\uc744 \ubd88\ub7ec\uc624\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. ${error.message || ''}`;
+    }
+  }
+
+  byId('restoreProjectBackup').onclick = openProjectBackupRestore;
+  byId('projectBackupSelect').addEventListener('change', () => {
+    byId('confirmProjectBackup').disabled = !byId('projectBackupSelect').value;
+  });
+  byId('projectBackupSelect').addEventListener('dblclick', () => byId('confirmProjectBackup').click());
+  byId('confirmProjectBackup').onclick = async () => {
+    const fileName = byId('projectBackupSelect').value;
+    if (!fileName) return;
+    const button = byId('confirmProjectBackup');
+    button.disabled = true;
+    try {
+      const name64 = btoa(String.fromCharCode(...new TextEncoder().encode(fileName)));
+      const response = await fetch(`/api/backup?name64=${encodeURIComponent(name64)}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || '\ubc31\uc5c5 \ud30c\uc77c \uc77d\uae30 \uc2e4\ud328');
+      await restoreBackupPayload(payload, fileName);
+    } catch (error) {
+      alert(`\ubc31\uc5c5 \ud30c\uc77c\uc744 \ubcf5\uc6d0\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.\n${error.message || '\ud30c\uc77c \ud615\uc2dd\uc744 \ud655\uc778\ud558\uc138\uc694.'}`);
+      button.disabled = false;
+    }
+  };
+  const closeBackupRestore = () => closeModal('backupRestoreModal');
+  byId('closeBackupRestore').onclick = closeBackupRestore;
+  byId('closeBackupRestoreIcon').onclick = closeBackupRestore;
+  backupRestoreModal.addEventListener('click', event => {
+    if (event.target === backupRestoreModal) closeBackupRestore();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && backupRestoreModal.classList.contains('open')) closeBackupRestore();
+  });
 
   byId('importBackup').onchange = event => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const payload = JSON.parse(reader.result);
-        if (!['A_MONEY_PORTFOLIO', 'WEALTHBOARD'].includes(payload.application)) throw new Error('\uc9c0\uc6d0\ud558\uc9c0 \uc54a\ub294 \ubc31\uc5c5 \ud615\uc2dd\uc785\ub2c8\ub2e4.');
-        const validation = validatePortfolioStorage(payload.data);
-        if (validation.errors.length) throw new Error(validation.errors.slice(0, 3).join('\n'));
-        const transactionCount = JSON.parse(payload.data['wb-transactions'] || '[]').length;
-        if (!confirm(`\ubc31\uc5c5\uc758 \uac70\ub798 ${transactionCount.toLocaleString('ko-KR')}\uac74\uc744 \ud3ec\ud568\ud55c \uc804\uccb4 \ub370\uc774\ud130\ub85c \uad50\uccb4\ud560\uae4c\uc694?\n\ud604\uc7ac \ub370\uc774\ud130\ub294 \ub36e\uc5b4\uc501\ub2c8\ub2e4.`)) return;
-        const previous = localPortfolioData();
-        try {
-          Object.keys(previous).forEach(key => localStorage.removeItem(key));
-          Object.entries(payload.data).forEach(([key, value]) => localStorage.setItem(key, value));
-        } catch (error) {
-          Object.keys(localPortfolioData()).forEach(key => localStorage.removeItem(key));
-          Object.entries(previous).forEach(([key, value]) => localStorage.setItem(key, value));
-          throw error;
-        }
-        location.reload();
+        await restoreBackupPayload(payload, file.name);
       } catch (error) {
         alert(`\ubc31\uc5c5 \ud30c\uc77c\uc744 \ubcf5\uc6d0\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.\n${error.message || '\ud30c\uc77c \ud615\uc2dd\uc744 \ud655\uc778\ud558\uc138\uc694.'}`);
       }
@@ -1712,7 +2580,7 @@
         <td>${won(position.value)}<div class="muted cell-note">${position.qty.toLocaleString('ko-KR')} \uc8fc${position.currency !== 'KRW' ? ` \u00b7 ${formatMasterPrice({ ...masterForAsset(position.name), price: position.currentPrice, currency: position.currency })} \u00b7 \ud658\uc728 ${position.currentFx.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}` : ''}</div></td>
         <td><span class="tag ${position.returnRate < 0 ? 'red' : ''}">${position.returnRate.toFixed(2)}%</span></td>
         <td><span class="market-badge ${position.market === '\ud574\uc678' ? 'overseas' : ''}">${esc(position.market)}</span></td>
-      </tr>`).join('') || '<tr><td colspan="7" class="empty">\ubcf4\uc720 \uc790\uc0b0\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.</td></tr>';
+      </tr>`).join('') || '<tr><td colspan="7" class="empty">\ubcf4\uc720 \uc885\ubaa9\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.</td></tr>';
     byId('assetRows').querySelectorAll('[data-market-asset]').forEach(button => {
       button.onclick = () => window.openMarketDetail?.(decodeURIComponent(button.dataset.marketAsset));
     });
@@ -2099,10 +2967,10 @@
       <div class="net-worth-chart-note"><i></i><span>\ucd1d \uc21c\uc790\uc0b0</span><small>\uacfc\uac70 \uc2dc\uc138\uac00 \uc5c6\ub294 \uad6c\uac04\uc740 \ud574\ub2f9 \uc6d4\uae4c\uc9c0\uc758 \ucd5c\uc2e0 \uac70\ub798\ub2e8\uac00\ub85c \ucd94\uc815\ud569\ub2c8\ub2e4.</small></div>
     </section>
     <section class="dashboard-signals" aria-label="\ud3ec\ud2b8\ud3f4\ub9ac\uc624 \ud575\uc2ec \uc2e0\ud638">
-      <div><span>\ucd5c\ub300 \uc885\ubaa9 \uc9d1\uc911\ub3c4</span><b id="dbConcentration">-</b><small id="dbConcentrationName">-</small></div>
-      <div><span>\uace0\uc704\ud5d8 \uc790\uc0b0</span><b id="dbHighRisk">-</b><small>\ud22c\uc790\uc790\uc0b0 \uae30\uc900</small></div>
-      <div><span>\ud574\uc678\uc790\uc0b0</span><b id="dbOverseas">-</b><small id="dbFxBasis">\ud658\uc728 \uae30\uc900 -</small></div>
-      <div><span>\uc7ac\ubb34\uc124\uacc4 \uc870\uc815 \ud6c4\ubcf4</span><b id="dbPlanActions">-</b><small id="dbPlanDetail">\ub9e4\uc218 0 \u00b7 \ucd95\uc18c 0</small></div>
+      <div class="dashboard-signal-card"><span>\ucd5c\ub300 \uc885\ubaa9 \uc9d1\uc911\ub3c4</span><b id="dbConcentration">-</b><small id="dbConcentrationName">-</small></div>
+      <div class="dashboard-signal-card is-clickable" data-dashboard-detail="high-risk" role="button" tabindex="0" aria-haspopup="dialog" aria-label="\uace0\uc704\ud5d8 \uc790\uc0b0 \uc0c1\uc138 \ubcf4\uae30"><span>\uace0\uc704\ud5d8 \uc790\uc0b0</span><b id="dbHighRisk">-</b><small>\ud22c\uc790\uc790\uc0b0 \uae30\uc900</small><i class="dashboard-detail-link-hint">\uc0c1\uc138 \ubcf4\uae30 \u203a</i></div>
+      <div class="dashboard-signal-card is-clickable" data-dashboard-detail="overseas" role="button" tabindex="0" aria-haspopup="dialog" aria-label="\ud574\uc678\uc790\uc0b0 \uc0c1\uc138 \ubcf4\uae30"><span>\ud574\uc678\uc790\uc0b0</span><b id="dbOverseas">-</b><small id="dbFxBasis">\ud658\uc728 \uae30\uc900 -</small><i class="dashboard-detail-link-hint">\uc0c1\uc138 \ubcf4\uae30 \u203a</i></div>
+      <div class="dashboard-signal-card is-clickable" data-dashboard-detail="plans" role="button" tabindex="0" aria-haspopup="dialog" aria-label="\uc7ac\ubb34\uc124\uacc4 \uc870\uc815 \ud6c4\ubcf4 \uc0c1\uc138 \ubcf4\uae30"><span>\uc7ac\ubb34\uc124\uacc4 \uc870\uc815 \ud6c4\ubcf4</span><b id="dbPlanActions">-</b><small id="dbPlanDetail">\ub9e4\uc218 0 \u00b7 \ucd95\uc18c 0</small><i class="dashboard-detail-link-hint">\uc0c1\uc138 \ubcf4\uae30 \u203a</i></div>
     </section>
     <div class="dashboard-primary-grid">
       <section class="dashboard-section">
@@ -2140,6 +3008,60 @@
       </section>
     </div>`;
   dashboard.appendChild(dashboardWorkspace);
+
+  const dashboardDetailModal = document.createElement('div');
+  dashboardDetailModal.className = 'modal';
+  dashboardDetailModal.id = 'dashboardDetailModal';
+  dashboardDetailModal.innerHTML = `
+    <div class="dialog dashboard-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="dashboardDetailTitle">
+      <div class="market-head">
+        <div><h2 id="dashboardDetailTitle">\uc790\uc0b0 \uc0c1\uc138\ub0b4\uc5ed</h2><div class="muted" id="dashboardDetailSubtitle"></div></div>
+        <button type="button" class="market-close" id="closeDashboardDetailIcon" title="\ub2eb\uae30" aria-label="\ub2eb\uae30">&times;</button>
+      </div>
+      <div class="dashboard-detail-summary" id="dashboardDetailSummary"></div>
+      <div class="dashboard-detail-table"><table><thead><tr id="dashboardDetailHeader"></tr></thead><tbody id="dashboardDetailRows"></tbody></table></div>
+      <div class="actions"><button type="button" class="btn" id="closeDashboardDetail">\ub2eb\uae30</button></div>
+    </div>`;
+  document.body.appendChild(dashboardDetailModal);
+  let dashboardDetailData = {};
+  let dashboardDetailTrigger = null;
+
+  function closeDashboardDetail() {
+    closeModal('dashboardDetailModal');
+    dashboardDetailTrigger?.focus();
+    dashboardDetailTrigger = null;
+  }
+
+  function openDashboardDetail(kind, trigger) {
+    const detail = dashboardDetailData[kind];
+    if (!detail) return;
+    dashboardDetailTrigger = trigger;
+    byId('dashboardDetailTitle').textContent = detail.title;
+    byId('dashboardDetailSubtitle').textContent = detail.subtitle;
+    byId('dashboardDetailSummary').innerHTML = detail.summary;
+    byId('dashboardDetailHeader').innerHTML = detail.headers.map(label => `<th>${esc(label)}</th>`).join('');
+    byId('dashboardDetailRows').innerHTML = detail.rows || `<tr><td colspan="${detail.headers.length}" class="empty">\ud574\ub2f9\ud558\ub294 \uc790\uc0b0\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.</td></tr>`;
+    openModal('dashboardDetailModal');
+    byId('closeDashboardDetailIcon').focus();
+  }
+
+  document.querySelectorAll('[data-dashboard-detail]').forEach(card => {
+    card.addEventListener('click', () => openDashboardDetail(card.dataset.dashboardDetail, card));
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDashboardDetail(card.dataset.dashboardDetail, card);
+      }
+    });
+  });
+  byId('closeDashboardDetail').onclick = closeDashboardDetail;
+  byId('closeDashboardDetailIcon').onclick = closeDashboardDetail;
+  dashboardDetailModal.addEventListener('click', event => {
+    if (event.target === dashboardDetailModal) closeDashboardDetail();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && dashboardDetailModal.classList.contains('open')) closeDashboardDetail();
+  });
 
   const dashboardColors = ['#216e8c', '#168166', '#d69a24', '#b64d47', '#5576a3', '#8b6aa8'];
   const dashboardRiskColors = { '\uace0\uc704\ud5d8': '#c9554f', '\uc911\uc704\ud5d8': '#d69a24', '\uc800\uc704\ud5d8': '#4f83b5', '\uc548\uc804': '#3d9277', '\ubbf8\ubd84\ub958': '#88959c' };
@@ -2332,7 +3254,8 @@
     const netWorth = investmentValue + deposits;
     const invested = investmentCost + deposits;
     const returnRate = investmentCost ? totalProfit / investmentCost * 100 : 0;
-    const overseas = ledger.positions.filter(item => item.currency !== 'KRW' || item.market === '\ud574\uc678').reduce((sum, item) => sum + item.value, 0);
+    const overseasPositions = ledger.positions.filter(item => item.currency !== 'KRW' || item.market === '\ud574\uc678');
+    const overseas = overseasPositions.reduce((sum, item) => sum + item.value, 0);
 
     byId('dbNetWorth').textContent = won(netWorth);
     byId('dbInvested').textContent = won(invested);
@@ -2355,13 +3278,15 @@
     const holdings = [...groupedHoldings.values()].sort((a, b) => b.value - a.value);
     const largest = holdings[0] || { name: '-', value: 0 };
     const concentration = investmentValue ? largest.value / investmentValue * 100 : 0;
-    const highRiskValue = ledger.positions.filter(item => item.risk === '\uace0\uc704\ud5d8').reduce((sum, item) => sum + item.value, 0);
+    const highRiskPositions = ledger.positions.filter(item => item.risk === '\uace0\uc704\ud5d8');
+    const highRiskValue = highRiskPositions.reduce((sum, item) => sum + item.value, 0);
     const highRiskRate = investmentValue ? highRiskValue / investmentValue * 100 : 0;
     const planningPositions = aggregatePlanningPositions();
     const planningTotal = planningPositions.reduce((sum, item) => sum + item.value, 0) || 1;
     const plans = planningPositions.map(position => buildAdvancedPlan(position, planningTotal, securityMasters(), marketSignalMap()));
     const buyCount = plans.filter(plan => plan.action === '\ubd84\ud560\ub9e4\uc218').length;
     const reduceCount = plans.filter(plan => ['\ubd84\ud560\ub9e4\ub3c4', '\uc704\ud5d8\ucd95\uc18c'].includes(plan.action)).length;
+    const adjustmentPlans = plans.filter(plan => ['\ubd84\ud560\ub9e4\uc218', '\ubd84\ud560\ub9e4\ub3c4', '\uc704\ud5d8\ucd95\uc18c'].includes(plan.action));
     byId('dbConcentration').textContent = `${concentration.toFixed(1)}%`;
     byId('dbConcentrationName').textContent = largest.name;
     byId('dbHighRisk').textContent = `${highRiskRate.toFixed(1)}%`;
@@ -2370,6 +3295,35 @@
     byId('dbFxBasis').textContent = `${won(overseas)} \u00b7 ${fxDates.at(-1) || '\ud658\uc728 \ubbf8\uac31\uc2e0'}`;
     byId('dbPlanActions').textContent = `${buyCount + reduceCount}\uac1c`;
     byId('dbPlanDetail').textContent = `\ub9e4\uc218 ${buyCount} \u00b7 \ucd95\uc18c ${reduceCount}`;
+
+    const fxBasisDate = fxDates.at(-1) || '\ud658\uc728 \ubbf8\uac31\uc2e0';
+    dashboardDetailData = {
+      'high-risk': {
+        title: '\uace0\uc704\ud5d8 \uc790\uc0b0 \uc0c1\uc138\ub0b4\uc5ed',
+        subtitle: '\uc885\ubaa9 \ub9c8\uc2a4\ud130\uc758 \uc704\ud5d8\ub3c4\uac00 \uace0\uc704\ud5d8\uc778 \ud604\uc7ac \ubcf4\uc720\uc790\uc0b0',
+        summary: `<div><span>\ud574\ub2f9 \uc885\ubaa9</span><b>${new Set(highRiskPositions.map(item => item.name)).size}\uac1c</b></div><div><span>\ud3c9\uac00\uae08\uc561</span><b>${won(highRiskValue)}</b></div><div><span>\ud22c\uc790\uc790\uc0b0 \ube44\uc911</span><b>${highRiskRate.toFixed(1)}%</b></div>`,
+        headers: ['\uc885\ubaa9', '\uacc4\uc88c', '\ud3c9\uac00\uae08\uc561', '\ud22c\uc790\uc790\uc0b0 \ube44\uc911'],
+        rows: [...highRiskPositions].sort((left, right) => right.value - left.value).map(position => `<tr><td><b>${esc(position.name)}</b><div class="muted cell-note">${esc(position.category)} \u00b7 ${number(position.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}\uc8fc</div></td><td>${esc(position.account || '-')}</td><td><b>${won(position.value)}</b></td><td>${(investmentValue ? position.value / investmentValue * 100 : 0).toFixed(1)}%</td></tr>`).join('')
+      },
+      overseas: {
+        title: '\ud574\uc678\uc790\uc0b0 \uc0c1\uc138\ub0b4\uc5ed',
+        subtitle: `\uc678\ud654 \ub610\ub294 \ud574\uc678\uc2dc\uc7a5\uc73c\ub85c \ubd84\ub958\ub41c \ubcf4\uc720\uc790\uc0b0 \u00b7 ${fxBasisDate} \ud658\uc728 \uae30\uc900`,
+        summary: `<div><span>\ud574\ub2f9 \uc885\ubaa9</span><b>${new Set(overseasPositions.map(item => item.name)).size}\uac1c</b></div><div><span>\ud3c9\uac00\uae08\uc561</span><b>${won(overseas)}</b></div><div><span>\uc21c\uc790\uc0b0 \ube44\uc911</span><b>${(netWorth ? overseas / netWorth * 100 : 0).toFixed(1)}%</b></div>`,
+        headers: ['\uc885\ubaa9', '\uacc4\uc88c', '\ud1b5\ud654\u00b7\ud658\uc728', '\ud3c9\uac00\uae08\uc561', '\uc21c\uc790\uc0b0 \ube44\uc911'],
+        rows: [...overseasPositions].sort((left, right) => right.value - left.value).map(position => `<tr><td><b>${esc(position.name)}</b><div class="muted cell-note">${esc(position.market)} \u00b7 ${number(position.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}\uc8fc</div></td><td>${esc(position.account || '-')}</td><td><b>${esc(position.currency)}</b><div class="muted cell-note">1 ${esc(position.currency)} = ${number(position.currentFx).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}\uc6d0</div></td><td><b>${won(position.value)}</b></td><td>${(netWorth ? position.value / netWorth * 100 : 0).toFixed(1)}%</td></tr>`).join('')
+      },
+      plans: {
+        title: '\uc7ac\ubb34\uc124\uacc4 \uc870\uc815 \ud6c4\ubcf4 \uc0c1\uc138\ub0b4\uc5ed',
+        subtitle: '\ubaa9\ud45c\ube44\uc911\u00b7\uad00\ub9ac\ubc94\uc704\u00b7\ucd94\uc138\ub97c \ubc18\uc601\ud55c \ud604\uc7ac \uc870\uc815 \ud6c4\ubcf4',
+        summary: `<div><span>\uc804\uccb4 \ud6c4\ubcf4</span><b>${adjustmentPlans.length}\uac1c</b></div><div><span>\ubd84\ud560\ub9e4\uc218</span><b>${buyCount}\uac1c</b></div><div><span>\ub9e4\ub3c4\u00b7\uc704\ud5d8\ucd95\uc18c</span><b>${reduceCount}\uac1c</b></div>`,
+        headers: ['\uc885\ubaa9', '\ud310\ub2e8', '\ud3c9\uac00\uae08\uc561\u00b7\ube44\uc911', '\ud310\ub2e8 \uadfc\uac70'],
+        rows: [...adjustmentPlans].sort((left, right) => right.value - left.value).map(plan => {
+          const levels = plan.levels.filter(Boolean).map((level, index) => `${index + 1}\ucc28 ${won(level[0])} \u00b7 ${Math.max(0, level[1]).toLocaleString('ko-KR')}\uc8fc`).join(' / ');
+          const actionClass = plan.action === '\ubd84\ud560\ub9e4\uc218' ? 'up' : 'down';
+          return `<tr><td><b>${esc(plan.name)}</b><div class="muted cell-note">${esc(plan.strategy)} \u00b7 ${esc(plan.trend)}</div></td><td><b class="${actionClass}">${esc(plan.action)}</b></td><td><b>${won(plan.value)}</b><div class="muted cell-note">\ud604\uc7ac ${plan.weight.toFixed(1)}% \u00b7 \ubaa9\ud45c ${plan.target.toFixed(1)}%</div></td><td class="dashboard-detail-reason"><b>${esc(plan.reason)}</b>${levels ? `<div class="muted cell-note">${esc(levels)}</div>` : ''}</td></tr>`;
+        }).join('')
+      }
+    };
 
     const allocation = new Map([['\uc608\u00b7\uc801\uae08', deposits]]);
     ledger.positions.forEach(position => {
@@ -2676,3 +3630,4 @@
   }
   if (requestedView === 'goals') refreshPlanPrices(false);
 })();
+
