@@ -1,145 +1,189 @@
-# A MONEY PORTFOLIO Demo
+# A MONEY PORTFOLIO
 
-개인 투자 포트폴리오를 한 화면에서 관리하는 로컬 웹 애플리케이션의 GitHub 배포용 데모입니다. 국내외 주식, ETF, 예·적금, 거래, 배당금, 실현손익과 재무설계를 브라우저에서 관리할 수 있습니다.
+A MONEY PORTFOLIO is a local web application for managing personal investments and savings in one place. It supports Korean and international stocks, ETFs, savings products, transactions, dividends, realized returns, portfolio analytics, and rule-based financial planning.
+
+> **Detailed project article:** [A MONEY PORTFOLIO project overview](https://star7sss.tistory.com/1141)
 
 > [!NOTE]
-> 이 폴더의 계좌, 거래, 보유수량, 예·적금 및 배당금은 기능 확인을 위한 가데이터입니다. 실제 투자성과나 금융상품 조건을 의미하지 않습니다.
+> All accounts, transactions, holdings, savings products, and dividend records in this demo are fictional sample data. They do not represent actual investment performance or real financial-product terms.
 
-## 샘플 데이터
+## Demo Data
 
-- 국내주식 매수·매도와 실현손익
-- 국내 상장 해외지수 ETF 적립식 매수
-- 미국 ETF `VOO` 보유 및 USD/KRW 환산
-- 금과 금리형 자산을 포함한 분산 포트폴리오
-- 국내주식·국내 ETF·해외 ETF 배당금
-- 기본금리·우대금리·정부기여금이 포함된 가상 예·적금
+The included sample portfolio demonstrates:
 
-설정의 데이터 초기화를 실행하면 사용 중 입력한 데이터가 삭제되고 위 샘플 데이터로 돌아갑니다.
+- Purchases, sales, and realized gains for Korean stocks
+- Recurring purchases of Korea-listed international index ETFs
+- A USD-denominated `VOO` position with USD/KRW conversion
+- A diversified portfolio containing gold and interest-rate-sensitive assets
+- Dividends from Korean stocks, Korean ETFs, and international ETFs
+- Fictional savings products with base rates, bonus rates, and government contributions
 
-## 주요 기능
+Running **Reset Data** in Settings deletes browser-side changes and restores this original sample portfolio.
 
-- 총자산, 투자원금, 손익, 수익률과 월별 순자산 변동 대시보드
-- 종목·위험도·자산종류·국가·계좌별 포트폴리오 비중 분석
-- 국내외 주식 및 ETF 보유수량, 원화 환산 평가금액과 환율 관리
-- 거래계좌·종목·매수·매도·배당 거래 CRUD
-- 예·적금 금리, 우대조건, 정부기여금, 납입회차와 만기예상금액 관리
-- 실현손익과 월별·종목별 배당금 성과분석
-- 보유비중, 수익률, 가격추세를 반영한 분할매수·분할매도·관찰 설계
-- 종목별 기간 주가 그래프, 관련 뉴스와 포트폴리오 코멘트
-- 표 열 필터와 오름차순·내림차순 정렬
-- 거래·배당 Excel 업로드와 안내 시트가 포함된 `.xlsx` 양식 다운로드
-- JSON 전체 백업·복원, CSV 내보내기, 데이터 점검과 초기화
+## Key Features
 
-## 실행 방법
+- Dashboard for total assets, invested capital, profit and loss, returns, and monthly net-worth trends
+- Portfolio allocation analysis by security, risk level, asset class, country, account, and currency
+- Holdings management for Korean and international stocks and ETFs
+- KRW valuation of foreign assets using exchange rates
+- CRUD operations for accounts, securities, purchases, sales, and dividends
+- Savings-product management for rates, bonus conditions, contributions, payment schedules, and estimated maturity proceeds
+- Performance analysis for realized gains and dividends by month and security
+- Rule-based split-buy, split-sell, and watch guidance using allocation, returns, and price trends
+- Historical price charts, related news, and portfolio comments
+- Column filtering and ascending or descending table sorting
+- Excel import for transactions and dividends
+- Downloadable `.xlsx` templates with instructions and data-entry sheets
+- JSON backup and restore, CSV export, data validation, and data reset
 
-### 빠른 실행
+## Requirements
 
-Windows에서 `start-app.cmd`를 실행합니다. 서버가 백그라운드로 시작되고 기본 브라우저에서 다음 주소가 열립니다.
+- Windows 10 or later
+- Windows PowerShell 5.1 or PowerShell 7
+- A modern web browser
+- Internet access for live prices, exchange rates, news, and dividend history
+
+No package installation or external database is required.
+
+## Running the Application
+
+### Quick Start
+
+Run `start-app.cmd`. The local server starts in the background and opens:
 
 ```text
 http://localhost:8780/
 ```
 
-### PowerShell에서 실행
+### PowerShell
 
-프로젝트 폴더에서 다음 명령을 실행합니다.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server.ps1 -Port 8780
-```
-
-다른 포트를 사용하려면 `-Port` 값을 변경합니다.
+From the project directory, run:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server.ps1 -Port 8780
 ```
 
-## 기본 사용법
+To use a different port, change the `-Port` value:
 
-### 대시보드
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server.ps1 -Port 9000
+```
 
-전체 자산 현황과 손익, 순자산 변동, 자산 배분 및 위험도 분포를 확인합니다. 요약 신호 카드를 클릭하면 판단 근거가 된 종목별 상세내역이 열리고, 종목 현황의 종목을 클릭하면 기간별 주가 추이와 관련 뉴스가 열립니다.
+## Basic Usage
 
-### 보유 자산
+### Dashboard
 
-계좌별 보유자산을 평가금액이 높은 순서로 확인합니다. 종목명을 클릭하면 재무설계와 동일한 시세·뉴스 팝업이 열립니다. 표 제목을 더블클릭하면 `오름차순 → 내림차순 → 정렬 해제` 순서로 변경됩니다.
+The dashboard summarizes total assets, profit and loss, net-worth trends, asset allocation, and risk distribution. Select a summary signal card to inspect the securities behind that signal. Select a holding to open its historical price chart and related news.
 
-### 예·적금
+### Holdings
 
-상품 추가 또는 수정 버튼으로 금융기관, 상품명, 납입액, 만기, 금리, 비고를 관리합니다. 금리를 클릭하면 우대금리 조건을 추가·수정·삭제하고 적용 여부를 선택할 수 있습니다. 정책상품은 정부기여금도 만기수령액에 반영할 수 있습니다.
+Holdings are aggregated by account and security and are displayed by valuation. Select a security name to open the same market-data dialog used in Financial Planning. Double-click a sortable column header to cycle through ascending, descending, and unsorted states.
 
-### 거래 내역
+### Savings
 
-`거래 추가`에서 거래일, 계좌, 종목, 거래구분, 수량과 단가를 입력합니다. 거래는 최신일 순으로 표시되며 계좌·종목·구분으로 조회할 수 있습니다. 기존 행의 수정 및 삭제 아이콘으로 내역을 관리합니다. 대량 등록은 `업로드 양식`을 내려받아 작성한 뒤 `Excel 업로드`를 사용합니다.
+Add or edit a product to manage its institution, product name, contribution amount, maturity date, interest rate, and notes. Select a rate to add, edit, remove, or activate bonus-rate conditions. Government contributions can also be included in estimated maturity proceeds.
 
-배당은 지급 월, 종목과 세후 수령액만 입력합니다. 앱은 종목별 배당일정과 전체 계좌 거래내역을 바탕으로 배당 기준수량과 세후 주당배당금을 계산합니다. 배당금내역도 전용 Excel 양식으로 일괄 등록할 수 있습니다.
+### Transactions and Dividends
 
-### 성과분석
+Use **Add Transaction** to enter the date, account, security, transaction type, quantity, and unit price. Transactions are displayed newest first and can be filtered by account, security, or type. Existing records can be edited or deleted.
 
-기간별 실현 매매차익, 배당 순수령액과 순 확정수익을 확인합니다. 월별 배당 그래프의 월 또는 종목별 확정수익 금액을 클릭하면 해당 거래·배당 상세내역이 열립니다.
+For bulk entry, download the transaction template, complete its data-entry sheet, and select **Excel Upload**. Dividend records have a separate Excel template and upload action.
 
-### 재무설계
+For dividends, enter the payment month, security, and net amount received. The application calculates the eligible quantity and net dividend per share using the security's dividend schedule and transaction history across all accounts.
 
-기본적으로 현재 보유 중인 종목만 투자금액이 높은 순서로 표시합니다. 보유수량, 투자금액, 현재가, 평균매입가, 수익률, 보유비중과 가격추세를 바탕으로 분할매수·분할매도·관찰 의견을 제공합니다. 종목명을 클릭하면 기간별 시세와 뉴스를 확인할 수 있습니다.
+Before applying an Excel import, the application reports valid rows, duplicates, and rejected rows. Existing matching records are not imported twice.
 
-재무설계 결과는 규칙 기반 참고정보이며 투자 권유가 아닙니다. 실제 투자 판단에는 기업 실적, 세금, 현금흐름과 개인 위험수용도를 함께 고려하십시오.
+### Performance
 
-### 설정
+Review realized trading gains, net dividends, and total confirmed income for a selected period. Select a month in the dividend chart or an amount in the security summary to open its supporting transaction or dividend records.
 
-- **계좌 기준정보**: 국내·해외 계좌와 기본통화를 관리합니다.
-- **종목 기준정보**: 거래 콤보박스에서 사용하는 종목명, 종목코드, 시장, 통화, 위험도와 현재가를 관리합니다.
-- **전체 백업**: 모든 `wb-` 브라우저 저장 데이터를 프로젝트의 `백업파일` 폴더에 JSON으로 저장합니다.
-- **백업 복원**: `백업파일` 폴더의 JSON 목록에서 선택해 현재 데이터를 교체합니다. 다른 위치의 JSON 파일도 보조 버튼으로 불러올 수 있습니다.
-- **CSV 내보내기**: 거래내역과 보유현황을 엑셀에서 열 수 있는 CSV로 저장합니다.
-- **Excel 업로드 및 양식 다운로드**: 거래내역과 배당금내역 화면에서 작성 안내가 포함된 `.xlsx` 양식을 내려받아 작성한 뒤 기존 데이터에 병합합니다. 동일 내역은 중복 추가하지 않으며 반영 전 건수와 오류 행을 확인합니다.
-- **데이터 점검**: 저장 데이터의 JSON 구조와 필수 항목을 검사합니다.
-- **데이터 초기화**: 브라우저의 변경 데이터를 삭제하고 앱에 포함된 기본 포트폴리오 데이터로 되돌립니다. 초기화 전 JSON 전체 백업을 권장합니다.
+### Financial Planning
 
-## 시세·환율·뉴스
+Financial Planning lists current holdings by invested amount and evaluates quantity, invested capital, current price, average purchase price, return, allocation, and recent price trend. It provides rule-based split-buy, split-sell, or watch guidance. Select a security to view its price history and news.
 
-`server.ps1`이 다음 외부 데이터를 중계합니다.
+> [!IMPORTANT]
+> Financial Planning results are rule-based reference information, not investment advice or a forecast of future returns.
 
-- 국내 시세: 네이버 증권
-- 해외 시세: Nasdaq
-- 환율: European Central Bank 기준환율
-- 뉴스: Google News RSS
-- 배당 이력: Stock Analysis
+### Settings and Data Management
 
-외부 서비스의 응답 제한, 종목코드 오류 또는 네트워크 상태에 따라 조회가 지연되거나 실패할 수 있습니다. 설정의 종목 기준정보에서 국내 종목은 6자리 코드, 미국 종목은 `VOO` 같은 티커를 사용하십시오.
+- **Account Master Data:** Manage Korean and international accounts and their default currencies.
+- **Security Master Data:** Manage names, symbols, markets, currencies, risk levels, countries, asset classes, and current prices.
+- **Full Backup:** Save all `wb-` browser storage data as JSON in the project's `백업파일` directory.
+- **Restore Backup:** Restore a backup selected from the project backup list or load a JSON file from another location.
+- **CSV Export:** Export transactions and holdings in a format that can be opened in spreadsheet software.
+- **Excel Templates and Import:** Download guided `.xlsx` templates and merge completed transaction or dividend data into the portfolio.
+- **Validate Data:** Check stored JSON structures and required fields.
+- **Reset Data:** Delete browser-side changes and restore the bundled demo portfolio.
 
-## 데이터 저장과 백업
+## Market Data Sources
 
-사용자가 입력한 데이터는 서버 데이터베이스가 아니라 현재 브라우저의 `localStorage`에 저장됩니다.
+`server.ps1` proxies requests to the following external services:
 
-- 브라우저 데이터 삭제, 다른 PC 사용 또는 다른 브라우저 접속 시 데이터가 자동으로 이동하지 않습니다.
-- 중요한 변경 후에는 `설정 → 데이터 및 백업 → 전체 백업`을 실행하십시오. 파일은 `백업파일\a-money-portfolio-전체백업-날짜-시각.json` 형식으로 저장됩니다.
-- 복원은 같은 화면의 `백업 파일 복원`에서 프로젝트 백업 목록을 선택합니다. 프로젝트 밖의 파일은 `다른 위치 파일`을 이용합니다.
-- CSV는 조회·분석용이며 전체 복원 파일로 사용할 수 없습니다.
+- Korean market prices: Naver Finance
+- International market prices: Nasdaq
+- Exchange rates: European Central Bank reference rates
+- News: Google News RSS
+- Dividend history: Stock Analysis
 
-## 프로젝트 구조
+Requests may be delayed or fail because of network conditions, source-service limits, or invalid symbols. Use a six-digit code for Korean securities and a ticker such as `VOO` for US securities.
+
+## Data Storage and Backups
+
+User-entered data is stored in the current browser's `localStorage`, not in a server-side database.
+
+- Clearing browser data or opening the application in a different browser or computer does not transfer the portfolio automatically.
+- After important changes, use **Settings → Data and Backup → Full Backup**.
+- Backup files are stored as `백업파일\a-money-portfolio-전체백업-YYYY-MM-DD-HHMMSS.json`.
+- Restore a project backup from the backup list or use the secondary file picker for JSON files stored elsewhere.
+- CSV exports are intended for viewing and analysis; they cannot restore the complete application state.
+
+## Project Structure
 
 ```text
 .
-├─ index.html                    # 화면, 기본 스타일과 핵심 UI
-├─ portfolio-enhancements.js     # 포트폴리오 계산, 화면 확장과 CRUD
-├─ portfolio-data.js             # 앱에 포함되는 초기 데이터
-├─ server.ps1                    # 정적 파일 및 시세·환율·뉴스 API 서버
-├─ start-app.cmd                 # Windows 빠른 실행
-├─ 백업파일/                      # 실행 중 생성되는 전체 JSON 백업 위치
-├─ tests/                        # 구문 및 Excel 양식 검증 스크립트
-└─ assets/                       # 로고와 이미지 리소스
+├─ index.html                    # Main UI, base styles, and core behavior
+├─ portfolio-enhancements.js     # Portfolio calculations, CRUD, charts, and extended UI
+├─ portfolio-data.js             # Fictional data bundled with the demo
+├─ server.ps1                    # Static-file server and proxy API
+├─ start-app.cmd                 # Windows quick-start script
+├─ 백업파일/                      # Runtime JSON backup directory
+├─ tests/                        # Syntax and Excel-template verification scripts
+└─ assets/                       # Logo and image assets
 ```
 
-## GitHub 게시 시 주의사항
+## Verification
 
-GitHub Pages는 PowerShell 서버를 실행하지 못하므로 정적 화면만 배포하면 `/api/market`, `/api/news`, `/api/fx`, `/api/dividends`, `/api/backup`, `/api/backups` 기능이 동작하지 않습니다. 전체 기능을 사용하려면 Windows PC에서 `server.ps1`로 실행하거나, 해당 API를 별도 웹 백엔드로 이전해야 합니다.
+The `tests` directory contains standalone checks for JavaScript syntax and generated Excel workbooks:
 
-현재 데모 폴더는 가데이터만 포함하므로 공개 저장소에 게시할 수 있습니다. 앱에서 내려받은 개인 JSON·CSV 백업과 실제 원본 엑셀은 커밋하지 마십시오.
+```powershell
+node .\tests\verify-script-syntax.mjs
+node .\tests\verify-excel-upload-templates.mjs
+```
 
-## 문제 해결
+## Publishing on GitHub
 
-- **화면이 이전 상태로 보임**: `Ctrl+F5`로 강력 새로고침합니다.
-- **페이지가 열리지 않음**: 다른 PowerShell 창에서 `server.ps1`을 실행하고 포트가 사용 중인지 확인합니다.
-- **시세나 뉴스가 표시되지 않음**: `index.html`을 직접 열지 말고 `http://localhost:8780/`으로 접속합니다.
-- **종목 현재가가 없음**: 설정에서 종목코드, 시장과 통화를 확인한 뒤 가격 새로고침을 실행합니다.
-- **데이터 복구 필요**: 설정의 백업 파일 복원을 사용합니다. 백업 없이 초기화한 데이터는 복원할 수 없습니다.
+This demo contains fictional data and is suitable for a public repository. Do not commit personal JSON or CSV exports, actual source workbooks, or backups created from real portfolio data.
+
+GitHub Pages serves static files only and cannot run the PowerShell server. When hosted only on GitHub Pages, the following server-backed endpoints are unavailable:
+
+- `/api/market`
+- `/api/news`
+- `/api/fx`
+- `/api/dividends`
+- `/api/backup`
+- `/api/backups`
+
+Run the project locally with `server.ps1` for full functionality, or migrate these endpoints to a separately hosted web backend.
+
+## Troubleshooting
+
+- **The page shows an older version:** Perform a hard refresh with `Ctrl+F5`.
+- **The page does not open:** Run `server.ps1` in PowerShell and confirm that port `8780` is available.
+- **Prices or news do not load:** Open `http://localhost:8780/` instead of opening `index.html` directly.
+- **A security has no current price:** Check its symbol, market, and currency in Security Master Data, then refresh prices.
+- **Portfolio data must be recovered:** Restore a JSON backup from Settings. Data reset without a backup cannot be undone.
+
+## Disclaimer
+
+This project is intended for feature demonstration and personal record keeping. Its data, calculations, and financial-planning output do not constitute investment advice. Users are solely responsible for their investment decisions and results.
+
